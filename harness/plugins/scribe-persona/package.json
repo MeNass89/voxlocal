@@ -1,6 +1,6 @@
 {
-  "name": "@voxlocal/portail-tools",
-  "description": "Outils patient.* et record.* du scribe VoxLocal : lecture du dossier et brouillons d'édition via le pont portail (JSON-RPC loopback).",
+  "name": "@voxlocal/scribe-persona",
+  "description": "Persona clinique du scribe VoxLocal : sections françaises du prompt système (rôle, boucle, règles, correspondance SOAP, feu vert).",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,14 +20,12 @@
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.4",
-    "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.2",
     "@deepseek-ai/schemastery": "3.18.4"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.4",
-    "@deepseek-ai/dsh-llm": "0.1.7-rc.2",
     "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
     "@deepseek-ai/schemastery": "3.18.4",
     "@types/node": "^22.20.0",
     "typescript": "^6.0.3",

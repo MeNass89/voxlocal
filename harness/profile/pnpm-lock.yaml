@@ -11,6 +11,18 @@ importers:
       '@deepseek-ai/dsh':
         specifier: 0.1.7-rc.2
         version: 0.1.7-rc.2(5cc34dd47a9d07f6834d5d3360a055fd)
+      '@voxlocal/dsh-voxlocal-tools':
+        specifier: link:../plugins/voxlocal-tools
+        version: link:../plugins/voxlocal-tools
+      '@voxlocal/portail-tools':
+        specifier: link:../plugins/portail-tools
+        version: link:../plugins/portail-tools
+      '@voxlocal/scribe-approval':
+        specifier: link:../plugins/scribe-approval
+        version: link:../plugins/scribe-approval
+      '@voxlocal/scribe-persona':
+        specifier: link:../plugins/scribe-persona
+        version: link:../plugins/scribe-persona
 
 packages:
 
