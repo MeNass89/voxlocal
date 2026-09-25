@@ -59,11 +59,15 @@ export VOXLOCAL_LLM_TOKEN='…'                        # jeton de la passerelle 
 export PORTAIL_BRIDGE_TOKEN="$(openssl rand -hex 24)"          # jeton outils du pont
 export PORTAIL_BRIDGE_APPROVER_TOKEN="$(openssl rand -hex 24)" # jeton approbateur, différent
 export SCRIBE_CLINICIAN='dr.dupont'                  # nom inscrit dans les journaux d’audit
-python3 -m harness.bridge.portail_bridge --backend mock &   # pont portail, mock enregistré
+export VOXLOCAL_API_URL='http://127.0.0.1:47367'     # API locale de VoxLocal (app Mac)
+export VOXLOCAL_API_TOKEN='…'                        # Réglages › iPhone › Harness local › Copier
+python3 -m harness.bridge.portail_bridge --backend mock &   # pont portail, mock enregistré ; lit les dictées sur l’API
 harness/run-web.sh                                   # dsh --profile scribe --no-open
 ```
 
-Optionnel : `PORTAIL_BRIDGE_URL` (défaut `http://127.0.0.1:47368/`), `SCRIBE_APPROVALS_AUDIT` (défaut `harness/audit/approvals.jsonl`).
+Le pont vérifie chaque citation contre la dictée lue sur l’API VoxLocal (`GET /v1/dictations/<id>`) ; le contexte patient de la dictée doit déclarer le patient et la rencontre (`patient=<id> rencontre=<id>`). `PORTAIL_DICTATION_DIR` (dossier de `dictation-*.json`) s’y ajoute ou la remplace ; en mock, les fixtures synthétiques restent consultées en dernier. En mode réel sans aucune source, le pont refuse tout brouillon.
+
+Optionnel : `PORTAIL_BRIDGE_URL` (défaut `http://127.0.0.1:47368/`), `SCRIBE_APPROVALS_AUDIT` (défaut `harness/audit/approvals.jsonl`). `run-web.sh` refuse, comme `run-web.ps1`, une `VOXLOCAL_LLM_URL` en HTTP vers un hôte distant ou portant des identifiants.
 
 Le script installe `dsh` au verrou près (`pnpm install --frozen-lockfile`), place le Harness home dans `harness/.dsh-home/` (ignoré par git), y relie le profil `scribe`, puis imprime une ligne `dsh web: http://127.0.0.1:3080/?token=…`. Ouvrir cette URL dans le navigateur du poste. Les options suivantes vont à l’app web (`--port 3081`, par exemple).
 
@@ -91,15 +95,17 @@ $env:VOXLOCAL_API_TOKEN = '…'
 - **Aucune donnée patient** dans ce dossier : fixtures et dictées de test synthétiques.
 - **Secrets hors git** : le jeton GPU vient de `VOXLOCAL_LLM_TOKEN` (`apiKeyEnv` de `dsh`), l’URL de `VOXLOCAL_LLM_URL`. Les identifiants du portail ne seront lus que par le pont (H3), jamais par le processus `dsh`.
 - **Écoute locale seulement** : l’interface web `dsh` n’écoute que sur la boucle locale et refuse `--host 0.0.0.0` ; l’URL de démarrage porte un jeton de processus.
-- **Le pont décide, pas le harness** (amendement 1) : le pont refuse `apply` et `restore` (403) tant qu’un humain n’a pas approuvé ce brouillon précis, et 409 si la section ou le brouillon a changé. La porte `dsh` (`scribe-approval`) est l’interface qui pose la question et relaie la réponse ; elle n’est pas la frontière. Test : `test_without_the_harness_gate_the_bridge_still_refuses` retire le plugin et constate que le pont refuse quand même.
+- **Le pont décide, pas le harness** (amendement 1) : le pont refuse `apply` et `restore` (403) tant qu’un humain n’a pas approuvé ce brouillon précis, et 409 si la section ou le brouillon a changé. Après l’écriture, une relecture différente du texte approuvé déclenche la restauration de la sauvegarde et un échec (pont et adaptateur réel). Un brouillon exige une source de dictées : chaque citation doit se trouver dans une dictée déclarant le même patient et la même rencontre, sinon refus ; il n’y a pas de mode permissif. La porte `dsh` (`scribe-approval`) est l’interface qui pose la question et relaie la réponse ; elle n’est pas la frontière. Test : `test_without_the_harness_gate_the_bridge_still_refuses` retire le plugin et constate que le pont refuse quand même.
 - **Deux jetons** : les outils ne portent que `PORTAIL_BRIDGE_TOKEN` (lire, préparer, demander l’écriture d’un brouillon approuvé). `PORTAIL_BRIDGE_APPROVER_TOKEN` n’est utilisé que par `scribe-approval`, après un « Allow once ». Aucun outil exposé au modèle n’appelle `approve_draft`, et le preset `scribe` n’a ni terminal ni accès fichiers : le modèle ne peut pas lire l’environnement du processus. Les deux jetons vivent dans le même processus `dsh` ; les séparer davantage (approbateur hors processus) est une amélioration possible, pas un prérequis tant que le modèle n’a aucun outil générique.
+- **Feu vert lié à la session** : `scribe-approval` indexe la question et l’accord par session et identifiant d’appel ; l’accord donné dans une session n’autorise jamais un appel d’une autre session.
 - **Politique** : `ask` dans le profil `scribe`. Sans répondeur (run sans interface), la demande échoue fermée (`unavailable`). `never` refuse toute écriture sans consulter personne.
-- **Audit** : `harness/audit/approvals.jsonl` (chaque décision : autorisé, refusé, annulé, indisponible, relais échoué, puis le résultat de l’écriture) et `harness/audit/portal-writes.jsonl` (côté pont). Identifiants et empreintes seulement, jamais le texte clinique. Les deux dossiers sont ignorés par git.
+- **Audit** : `harness/audit/approvals.jsonl` (chaque décision : autorisé, refusé, annulé, indisponible, relais échoué, puis le résultat de l’écriture) et `harness/audit/portal-writes.jsonl` (côté pont). Identifiants et empreintes seulement, jamais le texte clinique : un identifiant fourni par le modèle n’est inscrit que s’il a la forme `drf-…`/`bak-…` (sinon son empreinte), et les erreurs par code et statut, jamais par message. Les deux dossiers sont ignorés par git.
+- **Feeder au moins une fois** : `dictation_feeder.py` enregistre les dictées en cours d’envoi avant d’envoyer ; après un arrêt, il les renvoie marquées « Renvoi possible après interruption (même identifiant de dictée ; ignorer si déjà reçu) ». Le backend `sdk` démarre le profil `scribe` (créé par `run-web.sh`) et refuse de démarrer sans lui.
 
 ## Tests
 
 ```bash
-python3 -m unittest harness.tests.test_bridge harness.tests.test_loop -v
+python3 -m unittest discover -s harness/tests -t . -v   # pont, feeder, lanceurs, boucle
 (cd harness/plugins/portail-tools && pnpm install && pnpm test)
 (cd harness/plugins/scribe-approval && pnpm install && pnpm test)
 (cd harness/plugins/scribe-persona && pnpm install && pnpm test)
