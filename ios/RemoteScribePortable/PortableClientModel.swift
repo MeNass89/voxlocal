@@ -8,11 +8,11 @@ enum PortablePhase: String {
 
     var title: String {
         switch self {
-        case .searching: return "Recherche du serveur"
+        case .searching: return "Recherche du poste"
         case .connecting: return "Connexion"
         case .ready: return "Prêt"
         case .starting: return "Démarrage"
-        case .recording: return "Enregistrement"
+        case .recording: return "Dictée en cours"
         case .stopping: return "Envoi des derniers morceaux"
         case .processing: return "Traitement"
         case .completed: return "Terminé"
@@ -50,6 +50,23 @@ struct PortableResult: Codable, Hashable, Identifiable {
     let backend: RemoteBackendKind
     let finalText: String
     let rawText: String?
+    /// What the poste did with the text, read from its final status message.
+    /// Optional so history saved by earlier versions still decodes.
+    var posteDelivery: PosteDelivery?
+}
+
+enum PosteDelivery: String, Codable, Hashable {
+    /// VoxLocal pasted the text into the frontmost app ("… collée automatiquement.").
+    case pasted
+    /// VoxLocal left the text on its clipboard ("… copiée dans le presse-papier.").
+    case copied
+
+    init?(statusMessage: String?) {
+        guard let message = statusMessage?.lowercased() else { return nil }
+        if message.contains("collée") { self = .pasted }
+        else if message.contains("copié") { self = .copied }
+        else { return nil }
+    }
 }
 
 /// SHA-256 of a server's leaf certificate, shown as uppercase hex in groups of
@@ -115,6 +132,10 @@ final class PortableClientModel: ObservableObject {
     @Published private(set) var connectedWithTLS: Bool?
     @Published var pendingTrust: PendingTrust?
     @Published private(set) var pinnedIdentity: PinnedServerIdentity?
+    /// True once discovery has run for `noServerDelay` without finding any poste.
+    @Published private(set) var noServerFound = false
+    /// The newest result, highlighted briefly after a dictée completes.
+    @Published private(set) var highlightedResultID: UUID?
 
     private let browser = RemoteScribeBrowser()
     private let client = RemoteScribeClient()
@@ -134,6 +155,11 @@ final class PortableClientModel: ObservableObject {
     private var currentReconnect: (() -> Void)?
     // Pins the Keychain refused to store; valid for this run only.
     private var memoryPins: [String: Data] = [:]
+    private var discoveryWatchdog: Timer?
+    // Bonjour name from a pairing link, connected as soon as it is discovered.
+    private var pendingLinkServerName: String?
+
+    static let noServerDelay: TimeInterval = 10
 
     private enum Keys {
         static let backend = "portable.backend"
@@ -157,6 +183,8 @@ final class PortableClientModel: ObservableObject {
     var canStop: Bool { phase == .recording }
     var isBusy: Bool { [.connecting, .starting, .stopping, .processing].contains(phase) }
     var isConnected: Bool { isPaired }
+    /// First-run empty state: nothing discovered, nothing connected, nothing in progress.
+    var showsNoServerHelp: Bool { noServerFound && servers.isEmpty && !isPaired && !isBusy }
 
     init() {
         let defaults = UserDefaults.standard
@@ -200,9 +228,35 @@ final class PortableClientModel: ObservableObject {
             let fingerprint = Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 37 &+ 11) })
             self.serverName = "Poste-Radiologie.local"
             self.phase = .failed
-            self.connectionMessage = "Identité du serveur à confirmer."
+            self.connectionMessage = "Identité du poste à confirmer."
             self.pendingTrust = PendingTrust(key: "Poste-Radiologie", serverName: "Poste-Radiologie.local", fingerprint: fingerprint, reconnect: {})
         }
+    }
+
+    // Screenshot hook: `-VoxLocalDemoState connected` shows a paired poste and one
+    // synthetic result without a server. Nothing is sent; starting a dictée fails.
+    private func seedDemoState() {
+        guard UserDefaults.standard.string(forKey: "VoxLocalDemoState") == "connected" else { return }
+        serverName = "Poste Cardiologie"
+        isPaired = true
+        connectedWithTLS = true
+        availableBackends = [.voxLocal]
+        selectedBackend = .voxLocal
+        phase = .ready
+        connectionMessage = "Connexion chiffrée prête."
+        results = [PortableResult(
+            id: UUID(),
+            completedAt: Date().addingTimeInterval(-120),
+            duration: 14,
+            backend: .voxLocal,
+            finalText: "Douleur thoracique apparue ce matin, sans irradiation. Pas de dyspnée. Constantes stables, ECG de contrôle à prévoir.",
+            rawText: "douleur thoracique apparue ce matin sans irradiation pas de dyspnée constantes stables ECG de contrôle à prévoir",
+            posteDelivery: .pasted
+        )]
+        // Replays the completion feedback (scroll to the result, outline) once on
+        // screen, and holds the outline so a screenshot can catch it.
+        let id = results[0].id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.highlightedResultID = id }
     }
     #endif
 
@@ -214,9 +268,65 @@ final class PortableClientModel: ObservableObject {
             connectionMessage = "Recherche sur le réseau local…"
         }
         browser.start()
+        armNoServerWatchdog()
         #if DEBUG
         seedDebugTrustSheet()
+        seedDemoState()
         #endif
+    }
+
+    /// Applies a link read from the poste's QR code, or pasted: the code goes to the
+    /// Keychain, the fingerprint becomes the pin of that Bonjour name, and the app
+    /// connects as soon as the poste is visible on the network. The poste's own
+    /// screen is the trust anchor, so a different stored pin is replaced.
+    /// Returns a message for the user when the link cannot be applied now.
+    func applyPairingLink(_ link: PairingLink) -> String? {
+        guard activeSessionID == nil, ![.starting, .recording, .stopping, .processing].contains(phase) else {
+            return "Terminez la dictée en cours avant d’appairer un poste."
+        }
+        if isPaired || isBusy { disconnect() }
+        startDiscovery()
+        pairingCode = link.code
+        savePairingCode()
+        useTLS = true
+        let key = link.serverName
+        let previous = memoryPins[key] ?? (try? SecurePairingStore.loadData(account: Keys.pin(key)))
+        do {
+            try SecurePairingStore.saveData(link.fingerprint, account: Keys.pin(key))
+            memoryPins[key] = nil
+        } catch {
+            memoryPins[key] = link.fingerprint
+            storageMessage = "Empreinte du poste conservée en mémoire uniquement : \(error.localizedDescription)"
+        }
+        pendingLinkServerName = key
+        errorText = nil
+        if phase == .failed { phase = .searching }
+        connectionMessage = previous != nil && previous != link.fingerprint
+            ? "Empreinte de « \(key) » mise à jour depuis le code du poste. Recherche sur ce Wi-Fi…"
+            : "Code enregistré. Recherche de « \(key) » sur ce Wi-Fi…"
+        connectPendingLinkServerIfFound()
+        return nil
+    }
+
+    private func connectPendingLinkServerIfFound() {
+        guard let name = pendingLinkServerName, !isPaired, !isBusy, activeSessionID == nil,
+              let server = servers.first(where: { $0.name == name })
+                ?? servers.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })
+        else { return }
+        pendingLinkServerName = nil
+        connect(to: server)
+    }
+
+    private func armNoServerWatchdog() {
+        discoveryWatchdog?.invalidate()
+        noServerFound = false
+        discoveryWatchdog = Timer.scheduledTimer(withTimeInterval: Self.noServerDelay, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.discoveryWatchdog = nil
+                self.noServerFound = self.servers.isEmpty
+            }
+        }
     }
 
     func connect(to server: DiscoveredRemoteScribeServer) {
@@ -225,7 +335,7 @@ final class PortableClientModel: ObservableObject {
         // localhost mock. Bonjour can discover a remote service, so never let a
         // stale TCP toggle silently send microphone audio over the LAN.
         guard useTLS else {
-            fail("TLS est requis pour un serveur découvert. Pour un test mock local, utilisez la connexion manuelle sur localhost.", connectionLost: true)
+            fail("TLS est requis pour un poste découvert. Pour un test mock local, utilisez la connexion manuelle sur localhost.", connectionLost: true)
             return
         }
         guard let pin = loadPin(for: server.name) else { return }
@@ -248,7 +358,7 @@ final class PortableClientModel: ObservableObject {
         guard !isBusy, activeSessionID == nil, validatePairingCode() else { return }
         let host = manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty else {
-            fail("Indiquez le nom ou l’adresse IP du serveur.", connectionLost: true)
+            fail("Indiquez le nom ou l’adresse IP du poste.", connectionLost: true)
             return
         }
         guard let port = UInt16(manualPort.trimmingCharacters(in: .whitespacesAndNewlines)), port > 0 else {
@@ -293,7 +403,7 @@ final class PortableClientModel: ObservableObject {
             memoryPins[trust.key] = nil
         } catch {
             memoryPins[trust.key] = trust.fingerprint
-            storageMessage = "Empreinte du serveur conservée en mémoire uniquement : \(error.localizedDescription)"
+            storageMessage = "Empreinte du poste conservée en mémoire uniquement : \(error.localizedDescription)"
         }
         refreshPinnedIdentity()
         trust.reconnect()
@@ -303,7 +413,7 @@ final class PortableClientModel: ObservableObject {
     func cancelPendingTrust() {
         pendingTrust = nil
         guard phase == .failed else { return }
-        connectionMessage = "Connexion annulée : identité du serveur non confirmée."
+        connectionMessage = "Connexion annulée : identité du poste non confirmée."
     }
 
     /// Deletes the pin; the next connection to this server asks for confirmation again.
@@ -327,7 +437,7 @@ final class PortableClientModel: ObservableObject {
         do {
             return .some(try SecurePairingStore.loadData(account: Keys.pin(key)))
         } catch {
-            fail("Empreinte du serveur illisible dans le trousseau : \(error.localizedDescription) Déverrouillez l’iPhone puis réessayez.", connectionLost: true)
+            fail("Empreinte du poste illisible dans le trousseau : \(error.localizedDescription) Déverrouillez l’iPhone puis réessayez.", connectionLost: true)
             return nil
         }
     }
@@ -341,11 +451,11 @@ final class PortableClientModel: ObservableObject {
     private func requestTrust(fingerprintBase64: String) {
         guard let key = currentServerKey, let reconnect = currentReconnect,
               let fingerprint = Data(base64Encoded: fingerprintBase64), fingerprint.count == 32 else {
-            fail("Certificat du serveur non vérifiable.", connectionLost: true)
+            fail("Certificat du poste non vérifiable.", connectionLost: true)
             return
         }
         let name = serverName ?? key
-        fail("Identité du serveur à confirmer.", connectionLost: true)
+        fail("Identité du poste à confirmer.", connectionLost: true)
         errorText = nil
         pendingTrust = PendingTrust(key: key, serverName: name, fingerprint: fingerprint, reconnect: reconnect)
     }
@@ -373,6 +483,7 @@ final class PortableClientModel: ObservableObject {
     func retry() {
         disconnect()
         startDiscovery()
+        if servers.isEmpty { armNoServerWatchdog() }
     }
 
     func toggleRecording() {
@@ -400,8 +511,8 @@ final class PortableClientModel: ObservableObject {
                     language: Locale.current.language.languageCode?.identifier ?? "fr",
                     backend: self.selectedBackend
                 )
-                self.connectionMessage = "Le serveur prépare la session…"
-                self.armDeadline(seconds: 30, message: "Le serveur n’a pas démarré la session à temps. Reconnectez-vous.")
+                self.connectionMessage = "Le poste prépare la dictée…"
+                self.armDeadline(seconds: 30, message: "Le poste n’a pas démarré la dictée à temps. Reconnectez-vous.")
             } catch {
                 self.activeSessionID = nil
                 self.fail(error.localizedDescription)
@@ -422,7 +533,7 @@ final class PortableClientModel: ObservableObject {
             do {
                 try self.client.stopSession()
                 self.phase = .processing
-                self.connectionMessage = "Traitement sur le serveur…"
+                self.connectionMessage = "Traitement sur le poste…"
                 UIApplication.shared.isIdleTimerDisabled = true
                 self.armDeadline(seconds: 300, message: "Le traitement dépasse cinq minutes. La connexion a été fermée ; vérifiez le poste avant de recommencer.")
             } catch { self.fail(error.localizedDescription, connectionLost: true) }
@@ -435,9 +546,9 @@ final class PortableClientModel: ObservableObject {
         // connection alive while the screen is locked. Never turn a lock into
         // an implicit STOP: the user remains in control of the clinical session.
         if scenePhase != .active && phase == .recording {
-            connectionMessage = "Enregistrement en arrière-plan…"
+            connectionMessage = "Dictée en arrière-plan…"
         } else if scenePhase == .active && phase == .recording {
-            connectionMessage = "Enregistrement et envoi vers le serveur…"
+            connectionMessage = "Dictée en cours, envoi vers le poste…"
         }
     }
 
@@ -481,12 +592,21 @@ final class PortableClientModel: ObservableObject {
         browser.onServersChanged = { [weak self] servers in
             guard let self else { return }
             self.servers = servers
-            // Discovery is untrusted: the user must choose a server explicitly.
+            if servers.isEmpty {
+                if self.discoveryWatchdog == nil && !self.noServerFound { self.armNoServerWatchdog() }
+            } else {
+                self.discoveryWatchdog?.invalidate()
+                self.discoveryWatchdog = nil
+                self.noServerFound = false
+            }
+            // Discovery is untrusted: connect only to a server the user chose, or
+            // to the one named by the pairing link the user scanned.
+            self.connectPendingLinkServerIfFound()
         }
         browser.onError = { [weak self] error in
             Task { @MainActor in
                 guard let self, !self.isPaired, self.phase == .searching else { return }
-                self.connectionMessage = "Découverte locale impossible : \(error.localizedDescription). Utilisez la connexion manuelle."
+                self.connectionMessage = "Découverte locale impossible : \(error.localizedDescription). Scannez le code du poste ou saisissez son adresse."
             }
         }
         client.onStateChanged = { [weak self] state in self?.handleConnectionState(state) }
@@ -502,7 +622,7 @@ final class PortableClientModel: ObservableObject {
                     self.requestTrust(fingerprintBase64: error.message)
                 case RemoteErrorPayload.pinMismatchCode:
                     // The message carries the observed fingerprint; never show it as an error text.
-                    self.fail("L’identité du serveur a changé. Vérifiez le poste avant de réessayer.", connectionLost: true)
+                    self.fail("L’identité du poste a changé. Vérifiez-le avant de réessayer.", connectionLost: true)
                 default:
                     self.fail(error.message, connectionLost: true)
                 }
@@ -536,11 +656,12 @@ final class PortableClientModel: ObservableObject {
         isPaired = false
         activeSessionID = nil
         pendingTrust = nil
+        pendingLinkServerName = nil
         refreshPinnedIdentity()
         phase = .connecting
         errorText = nil
         connectionMessage = "Connexion et appairage…"
-        armDeadline(seconds: 20, message: "Connexion ou appairage sans réponse. Vérifiez le serveur, le réseau et son certificat TLS.")
+        armDeadline(seconds: 20, message: "Connexion ou appairage sans réponse. Vérifiez le poste, le réseau et son certificat TLS.")
         action()
     }
 
@@ -552,7 +673,7 @@ final class PortableClientModel: ObservableObject {
             if isPaired { fail("Réseau interrompu : \(error.localizedDescription)", connectionLost: true) }
             else { connectionMessage = "Réseau indisponible : \(error.localizedDescription)" }
         case .cancelled:
-            if isPaired || phase == .connecting { fail("Connexion fermée. Reconnectez le serveur.", connectionLost: true) }
+            if isPaired || phase == .connecting { fail("Connexion fermée. Reconnectez le poste.", connectionLost: true) }
         case .failed(let error):
             fail("Connexion perdue : \(error.localizedDescription)", connectionLost: true)
         default:
@@ -563,7 +684,7 @@ final class PortableClientModel: ObservableObject {
     private func handlePair(_ response: PairResponse) {
         guard phase == .connecting else { return }
         guard response.accepted else {
-            fail("Le serveur a refusé l’appairage.", connectionLost: true)
+            fail("Le poste a refusé l’appairage.", connectionLost: true)
             return
         }
         cancelDeadline()
@@ -591,7 +712,7 @@ final class PortableClientModel: ObservableObject {
             beginCapture()
         case .processing:
             guard phase == .processing || phase == .stopping else {
-                fail("Le serveur a interrompu l’enregistrement.", connectionLost: true)
+                fail("Le poste a interrompu la dictée.", connectionLost: true)
                 return
             }
             phase = .processing
@@ -623,7 +744,7 @@ final class PortableClientModel: ObservableObject {
             self.phase = .recording
             self.startedAt = Date()
             self.elapsed = 0
-            self.connectionMessage = "Enregistrement et envoi vers le serveur…"
+            self.connectionMessage = "Dictée en cours, envoi vers le poste…"
             UIApplication.shared.isIdleTimerDisabled = true
             self.timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
                 Task { @MainActor in
@@ -637,14 +758,15 @@ final class PortableClientModel: ObservableObject {
     private func finishCompleted(sessionID: UUID, status: SessionStatusPayload) {
         cancelDeadline()
         client.abandonSession()
-        let final = nonEmpty(status.finalText) ?? nonEmpty(status.transcription) ?? "Le serveur n’a pas transmis de texte."
+        let final = nonEmpty(status.finalText) ?? nonEmpty(status.transcription) ?? "Le poste n’a pas transmis de texte."
         let result = PortableResult(
             id: sessionID,
             completedAt: Date(),
             duration: elapsed,
             backend: status.backend,
             finalText: final,
-            rawText: nonEmpty(status.rawTranscription)
+            rawText: nonEmpty(status.rawTranscription),
+            posteDelivery: PosteDelivery(statusMessage: status.message)
         )
         results.removeAll { $0.id == sessionID }
         results.insert(result, at: 0)
@@ -655,6 +777,16 @@ final class PortableClientModel: ObservableObject {
         phase = .completed
         errorText = nil
         connectionMessage = status.message ?? "Dictée terminée."
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        highlight(result.id)
+    }
+
+    private func highlight(_ id: UUID) {
+        highlightedResultID = id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.highlightedResultID == id else { return }
+            self.highlightedResultID = nil
+        }
     }
 
     private func fail(_ message: String, connectionLost: Bool = false) {
@@ -701,7 +833,7 @@ final class PortableClientModel: ObservableObject {
 
     private func validatePairingCode() -> Bool {
         guard normalizedPairingCode != nil else {
-            errorText = "Saisissez le code d’appairage affiché sur le serveur."
+            errorText = "Saisissez le code d’appairage affiché sur le poste."
             return false
         }
         return true
