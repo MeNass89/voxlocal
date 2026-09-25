@@ -98,7 +98,26 @@ struct RemoteScribeView: View {
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 Section("Réseau") {
-                    Text("Le client détecte automatiquement ce Mac. Le protocole conserve un UUID par session et refuse les chunks manquants ou hors ordre.")
+                    LabeledContent("Port") { Text("47365") }
+                    LabeledContent("Code d’appairage") {
+                        HStack {
+                            Text(state.remotePairingCode.isEmpty ? "—" : state.remotePairingCode)
+                                .font(.system(.body, design: .monospaced))
+                                .accessibilityLabel("Code d’appairage \(state.remotePairingCode)")
+                            Button("Copier") { state.copyRemotePairingCode() }
+                                .disabled(state.remotePairingCode.isEmpty)
+                                .accessibilityHint("Copie le code sans tiret dans le presse-papier.")
+                            Button("Régénérer") { state.regenerateRemotePairingCode() }
+                                .accessibilityHint("Crée un nouveau code. Les appareils devront s’appairer de nouveau.")
+                        }
+                    }
+                    LabeledContent("Empreinte TLS (SHA-256)") {
+                        Text(state.remoteTLSFingerprint ?? "Indisponible")
+                            .font(.system(.footnote, design: .monospaced))
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Text("Sur l’iPhone, saisissez le code puis comparez l’empreinte affichée lors de la première connexion.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }.formStyle(.grouped).padding(10)
