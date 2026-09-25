@@ -5,7 +5,7 @@
  * Run: cd harness/plugins/scribe-persona && pnpm test
  */
 import { describe, expect, it } from 'vitest'
-import { mount, ScribePersona } from './runtime.ts'
+import { mount, ScribePersona } from '../plugins/scribe-persona/tests/runtime.ts'
 
 describe('scribe-persona', () => {
   it('renders role, loop, hard rules, SOAP mapping, approval reminder and toolbox gaps in order', async () => {

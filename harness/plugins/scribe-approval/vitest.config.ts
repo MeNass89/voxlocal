@@ -8,7 +8,7 @@ export default defineConfig({
     // The spec lives with the other harness tests; dsh imports resolve through tests/runtime.ts
     // inside this package.
     dir: harness,
-    include: ['tests/test_scribe_persona.spec.ts'],
+    include: ['tests/test_scribe_approval.spec.ts'],
     environment: 'node',
     testTimeout: 20_000,
   },
