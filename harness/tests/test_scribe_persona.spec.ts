@@ -35,6 +35,12 @@ describe('scribe-persona', () => {
     }
   })
 
+  it('treats a repeated dictation id as a re-delivery, not a new dictation', async () => {
+    const prompt = await (await mount()).render()
+    expect(prompt).toContain('« Renvoi possible après interruption »')
+    expect(prompt).toContain('est un renvoi, pas une nouvelle dictée')
+  })
+
   it('maps SOAP onto the four narrative sections', async () => {
     const { render } = await mount()
     const prompt = await render()

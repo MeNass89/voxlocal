@@ -12,8 +12,8 @@ from unittest.mock import patch
 
 from agent.voxlocal_agent_api import AgentHTTPServer, AgentService, InMemoryDictationSource, VoiceProvider
 from harness.ingest import dictation_feeder as feeder_module
-from harness.ingest.dictation_feeder import (DictationAPI, DryRunClient, Feeder, FeederConfig, SdkClient, dictation_message,
-                                             format_duration, trigger_for)
+from harness.ingest.dictation_feeder import (RESEND_PREFIX, APIError, DictationAPI, DryRunClient, Feeder, FeederConfig,
+                                             SdkClient, build_parser, dictation_message, format_duration, trigger_for)
 
 TOKEN = "feeder-test-token-0123456789"
 
@@ -186,8 +186,9 @@ class FeederTest(unittest.TestCase):
                 pass
 
         fake = types.ModuleType("deepseek_harness"); fake.DeepSeekHarness = FakeHarness
-        with patch.dict(sys.modules, {"deepseek_harness": fake}):
-            client = SdkClient(dsh_home=str(self.tmp), profile="sdk", session_id="scribe-1", provider=None, model=None, pause=20)
+        (self.tmp / "profiles" / "scribe").mkdir(parents=True)
+        with patch.dict(sys.modules, {"deepseek_harness": fake}), patch.dict("os.environ", {}):
+            client = SdkClient(dsh_home=str(self.tmp), profile="scribe", session_id="scribe-1", provider=None, model=None, pause=20)
         feeder = Feeder(DictationAPI(self.url, TOKEN), client, self.state, FeederConfig(), clock=self.clock, log=lambda _m: None)
         first = self.add("Traumatisme en inversion.")
         feeder.step(0)
@@ -202,6 +203,138 @@ class FeederTest(unittest.TestCase):
         feeder.step(0); self.clock.now += 20; feeder.step(0)
         self.assertEqual(len(runs), 2)
         self.assertIn("Pause de dictée", runs[1][0])
+
+    # ------------------------------------------------------- sdk profile (A5)
+
+    def test_sdk_backend_defaults_to_the_scribe_profile_and_refuses_a_missing_one(self):
+        self.assertEqual(build_parser().parse_args([]).dsh_profile, "scribe")
+        fake = types.ModuleType("deepseek_harness")
+        fake.DeepSeekHarness = lambda **options: types.SimpleNamespace(options=options)
+        with patch.dict(sys.modules, {"deepseek_harness": fake}), patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(SystemExit) as cm:
+                SdkClient(dsh_home=str(self.tmp), profile="scribe", session_id="s", provider=None, model=None, pause=20)
+            self.assertIn("harness/run-web.sh", str(cm.exception))
+            self.assertNotIn("DSH_AGENTS_HOME", __import__("os").environ)
+            (self.tmp / "profiles" / "scribe").mkdir(parents=True)
+            client = SdkClient(dsh_home=str(self.tmp), profile="scribe", session_id="s", provider=None, model=None, pause=20)
+            self.assertEqual(client.harness.options["profile"], "scribe")
+            self.assertEqual(__import__("os").environ["DSH_AGENTS_HOME"], str(self.tmp / "agents"))
+
+    # ------------------------------------------------ at-least-once (A6)
+
+    def test_crash_between_save_and_send_resends_with_the_marker_then_delivers_once(self):
+        record = self.add("Traumatisme en inversion. Fin.")
+
+        class Crash(Exception):
+            pass
+
+        class CrashingClient(DryRunClient):
+            def followup(self, *a, **kw):
+                raise Crash()
+
+        crashing = Feeder(DictationAPI(self.url, TOKEN), CrashingClient(self.dryrun), self.state, FeederConfig(),
+                          clock=self.clock, log=lambda _m: None)
+        with self.assertRaises(Crash):
+            crashing.step(0)
+        saved = json.loads(self.state.read_text())
+        self.assertEqual((saved["inflight"], saved["inflightReason"]), ([record["id"]], "fin"))
+        self.assertEqual(saved["delivered"], [])
+        self.assertEqual(self.lines(), [])
+        logs = []
+        restarted = Feeder(DictationAPI(self.url, TOKEN), DryRunClient(self.dryrun), self.state, FeederConfig(),
+                           clock=self.clock, log=logs.append)
+        restarted.step(0)
+        restarted.step(0)
+        lines = self.lines()
+        self.assertEqual([(l["action"], l["dictationId"]) for l in lines], [("followup", record["id"])])
+        self.assertTrue(lines[0]["text"].startswith(RESEND_PREFIX + "\nNouvelle dictée " + record["id"]))
+        self.assertTrue(any("renvoi après interruption" in m for m in logs))
+        saved = json.loads(self.state.read_text())
+        self.assertEqual((saved["inflight"], saved["delivered"]), ([], [record["id"]]))
+
+    def test_sdk_send_that_landed_before_the_crash_is_resent_marked(self):
+        runs = []
+
+        class FakeHarness:
+            def __init__(self, **options):
+                pass
+
+            def run(self, prompt, session_id=None):
+                runs.append(prompt)
+
+            def close(self):
+                pass
+
+        fake = types.ModuleType("deepseek_harness"); fake.DeepSeekHarness = FakeHarness
+        (self.tmp / "profiles" / "scribe").mkdir(parents=True)
+        with patch.dict(sys.modules, {"deepseek_harness": fake}), patch.dict("os.environ", {}):
+            client = SdkClient(dsh_home=str(self.tmp), profile="scribe", session_id="s", provider=None, model=None, pause=20)
+        first, second = self.add("Traumatisme en inversion."), self.add("Agent, prépare la note.")
+        feeder = Feeder(DictationAPI(self.url, TOKEN), client, self.state, FeederConfig(), clock=self.clock, log=lambda _m: None)
+        real_save = feeder.state.save
+        calls = {"n": 0}
+
+        def save_then_die(path):  # the save after the send never happens
+            calls["n"] += 1
+            if feeder.state.inflight == [] and calls["n"] > 1 and runs:
+                raise KeyboardInterrupt
+            real_save(path)
+
+        feeder.state.save = save_then_die
+        with self.assertRaises(KeyboardInterrupt):
+            feeder.step(0)
+        self.assertEqual(len(runs), 1)
+        again = Feeder(DictationAPI(self.url, TOKEN), client, self.state, FeederConfig(), clock=self.clock, log=lambda _m: None)
+        again.step(0)
+        self.assertEqual(len(runs), 2)
+        self.assertEqual(runs[1].count(RESEND_PREFIX), 2)
+        self.assertLess(runs[1].index(first["id"]), runs[1].index(second["id"]))
+        again.step(0)
+        self.assertEqual(len(runs), 2)
+
+    # ------------------------------------------------- relecture errors (A7)
+
+    def test_a_transient_api_error_on_relecture_keeps_pending_and_the_next_pass_delivers(self):
+        first = self.add("Œdème malléolaire externe.")
+        feeder = self.feeder()
+        feeder.step(0)
+        self.assertEqual(json.loads(self.state.read_text())["pending"], [first["id"]])
+        second = self.add("Pas de fracture. Fin.")
+        real_get = feeder.api.get
+        feeder.api.get = lambda _id: (_ for _ in ()).throw(APIError(503, "unavailable", "occupé"))
+        with self.assertRaises(APIError):
+            feeder.step(0)
+        saved = json.loads(self.state.read_text())
+        self.assertEqual(saved["pending"], [first["id"]])
+        self.assertNotIn(second["id"], saved["delivered"])
+        self.assertEqual(saved["inflight"], [])
+        feeder.api.get = real_get
+        feeder.step(0)
+        lines = self.lines()
+        self.assertEqual([l["action"] for l in lines], ["inject", "followup"])
+        self.assertEqual((lines[1]["dictationId"], lines[1]["withInjected"]), (second["id"], [first["id"]]))
+        self.assertEqual(json.loads(self.state.read_text())["pending"], [])
+
+    def test_a_deleted_dictation_is_skipped_on_relecture(self):
+        first = self.add("Œdème malléolaire externe.")
+        feeder = self.feeder()
+        feeder.step(0)
+        feeder.api.get = lambda _id: (_ for _ in ()).throw(APIError(404, "not_found", "Dictée introuvable."))
+        self.clock.now += 20
+        feeder.step(0)
+        lines = self.lines()
+        self.assertEqual([(l["action"], l.get("withInjected")) for l in lines], [("inject", None), ("followup", [])])
+        self.assertEqual(json.loads(self.state.read_text())["pending"], [])
+
+    def test_pause_followup_error_keeps_pending(self):
+        first = self.add("Œdème malléolaire externe.")
+        feeder = self.feeder()
+        feeder.step(0)
+        self.clock.now += 20
+        feeder.api.get = lambda _id: (_ for _ in ()).throw(OSError("connexion refusée"))
+        with self.assertRaises(OSError):
+            feeder.step(0)
+        self.assertEqual(json.loads(self.state.read_text())["pending"], [first["id"]])
 
     def test_token_is_required_from_the_environment(self):
         with patch.dict("os.environ", {"VOXLOCAL_API_TOKEN": ""}), redirect_stderr(io.StringIO()):

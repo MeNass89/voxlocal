@@ -16,14 +16,22 @@ Real-time semantics (plan Amendment 1, D):
   with one of ``--end-words`` (« fin »).
 
 Restart safety: ``state.json`` keeps the acknowledged cursor, the ids already
-delivered, and the ids injected but not yet followed up. No clinical text is
-stored in the state; a followup re-reads its dictations from the API.
+delivered, the ids injected but not yet followed up, and the ids of the message
+being sent (``inflight``). No clinical text is stored in the state; a followup
+re-reads its dictations from the API.
+
+Delivery is **at-least-once**, and says so: ``inflight`` is saved before a send
+and cleared after it. A feeder stopped in between re-sends those dictations on
+its next start, each prefixed with « Renvoi possible après interruption (même
+identifiant de dictée ; ignorer si déjà reçu) », so the agent can tell a
+re-delivery from a new dictation (the scribe persona says the same).
 
 Backends (``HarnessClient``):
 
 * ``dryrun`` writes one JSONL line per call it would make; idempotent by
   dictation id even if the state file is lost.
-* ``sdk`` drives the DeepSeek Harness Python SDK. The SDK exposes only
+* ``sdk`` drives the DeepSeek Harness Python SDK on the clinical ``scribe``
+  profile (created by ``harness/run-web.sh``). The SDK exposes only
   ``session/prompt`` (= ``agent.followup``); it has no inject. Injects are
   therefore held in the state and sent with the next followup as one ``run()``.
 
@@ -54,6 +62,8 @@ DEFAULT_PAUSE = 20.0
 DEFAULT_END_WORDS = ("fin",)
 DEFAULT_COMMAND_PREFIXES = ("agent", "commande")
 STATE_VERSION = 1
+DEFAULT_DSH_PROFILE = "scribe"
+RESEND_PREFIX = "« Renvoi possible après interruption (même identifiant de dictée ; ignorer si déjà reçu) »"
 
 
 # ---------------------------------------------------------------- formatting
@@ -158,6 +168,12 @@ class SdkClient:
     the SDK wire protocol, so injects are sent with the next followup."""
 
     def __init__(self, *, dsh_home: str, profile: str, session_id: str, provider: Optional[str], model: Optional[str], pause: float):
+        # The SDK starts its own dsh process: it must boot the clinical profile, never the generic
+        # one, and keep the operator's personal ~/.agents skills out (same as run-web.sh).
+        if not (Path(dsh_home) / "profiles" / profile).is_dir():
+            raise SystemExit(f"Backend sdk : profil dsh « {profile} » introuvable dans {Path(dsh_home) / 'profiles'} ; "
+                             "lancez une fois harness/run-web.sh pour créer le lien du profil.")
+        os.environ.setdefault("DSH_AGENTS_HOME", str(Path(dsh_home) / "agents"))
         try:
             from deepseek_harness import DeepSeekHarness  # type: ignore[import-not-found]
         except ImportError as exc:
@@ -258,6 +274,10 @@ class FeederState:
     delivered: list[str] = field(default_factory=list)
     pending: list[str] = field(default_factory=list)
     last_dictation_at: Optional[float] = None
+    #: Ids of the message being sent, saved before the send and cleared after it.
+    inflight: list[str] = field(default_factory=list)
+    #: None for an inject, else the followup reason (the last inflight id is its trigger for fin/command).
+    inflight_reason: Optional[str] = None
 
     @classmethod
     def load(cls, path: Path) -> "FeederState":
@@ -266,12 +286,14 @@ class FeederState:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if raw.get("version") != STATE_VERSION:
             raise SystemExit(f"{path} : version d'état inconnue ({raw.get('version')}).")
-        return cls(raw.get("cursor"), list(raw.get("delivered", [])), list(raw.get("pending", [])), raw.get("lastDictationAt"))
+        return cls(raw.get("cursor"), list(raw.get("delivered", [])), list(raw.get("pending", [])), raw.get("lastDictationAt"),
+                   list(raw.get("inflight", [])), raw.get("inflightReason"))
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"version": STATE_VERSION, "cursor": self.cursor, "delivered": self.delivered[-MAX_DELIVERED:],
-                   "pending": self.pending, "lastDictationAt": self.last_dictation_at}
+                   "pending": self.pending, "lastDictationAt": self.last_dictation_at,
+                   "inflight": self.inflight, "inflightReason": self.inflight_reason}
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".state-", suffix=".json")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
@@ -294,20 +316,67 @@ class Feeder:
         self.api, self.client, self.state_path, self.config = api, client, state_path, config
         self.state = FeederState.load(state_path)
         self.clock, self.log = clock, log
+        self._resumed = False
 
     def _is_delivered(self, dictation_id: str) -> bool:
         return dictation_id in self.state.delivered or self.client.already_delivered(dictation_id)
 
-    def _items(self, ids: list[str]) -> list[FeedItem]:
+    def _items(self, ids: list[str], prefix: str = "") -> list[FeedItem]:
+        """Re-read dictations for a followup. Only a deleted dictation (404) is skipped; any other
+        API or network error propagates, so the caller keeps its pending ids and retries."""
         items = []
         for dictation_id in ids:
             try:
                 record = self.api.get(dictation_id)
             except APIError as exc:
+                if exc.status != 404:
+                    raise
                 self.log(f"dictée {dictation_id} introuvable pour la relance ({exc.code}) : ignorée")
                 continue
-            items.append(FeedItem(record, dictation_message(record)))
+            items.append(FeedItem(record, prefix + dictation_message(record)))
         return items
+
+    def _send(self, ids: list[str], reason: Optional[str], send: Callable[[], None]) -> None:
+        """Save ``ids`` as in flight, send, and leave clearing to the caller's next save."""
+        self.state.inflight, self.state.inflight_reason = list(ids), reason
+        self.state.save(self.state_path)
+        send()
+
+    def _landed(self) -> None:
+        self.state.inflight, self.state.inflight_reason = [], None
+
+    def resume_inflight(self) -> None:
+        """Re-send what a stopped feeder may or may not have delivered, marked as a re-delivery."""
+        ids, reason = list(self.state.inflight), self.state.inflight_reason
+        # A client with its own receipts (dryrun) knows whether an inject or a fin/command trigger
+        # landed; a pause followup has no receipt, and the SDK has none at all: those are re-sent.
+        seen = self.client.already_delivered
+        landed = bool(ids) and ((reason is None and all(seen(i) for i in ids))
+                                or (reason in ("fin", "command") and seen(ids[-1])))
+        if not ids or landed:
+            if ids:
+                self._landed()
+                self.state.delivered += [i for i in ids if i not in self.state.delivered]
+                self.state.pending = [i for i in self.state.pending if reason is None or i not in ids]
+                self.state.save(self.state_path)
+            self._resumed = True
+            return
+        items = {item.record["id"]: item for item in self._items(ids, RESEND_PREFIX + "\n")}  # may raise: retried
+        if reason is None:
+            for item in items.values():
+                self.client.inject(item)
+            self.state.pending += [i for i in ids if i not in self.state.pending]
+            self.state.last_dictation_at = self.clock()
+        else:
+            trigger_id = ids[-1] if reason != "pause" else None
+            batch = [items[i] for i in ids if i in items and i != trigger_id]
+            self.client.followup(reason, batch, items.get(trigger_id) if trigger_id else None)
+            self.state.pending = [i for i in self.state.pending if i not in ids]
+        self.state.delivered += [i for i in ids if i not in self.state.delivered]
+        self._landed()
+        self.state.save(self.state_path)
+        self._resumed = True
+        self.log(f"renvoi après interruption : {', '.join(ids)} ({'inject' if reason is None else 'followup/' + reason})")
 
     def process(self, records: list[dict[str, Any]]) -> bool:
         """Deliver a batch (oldest first). Returns True if a record is still in
@@ -326,12 +395,15 @@ class Feeder:
                 item = FeedItem(record, dictation_message(record))
                 reason = trigger_for(record, self.config.end_words, self.config.command_prefixes)
                 if reason is None:
-                    self.client.inject(item)
+                    self._send([dictation_id], None, lambda: self.client.inject(item))
                     self.state.pending.append(dictation_id)
                 else:
-                    self.client.followup(reason, self._items(self.state.pending), item)
+                    batch = self._items(self.state.pending)  # may raise: nothing sent, pending kept
+                    self._send([*self.state.pending, dictation_id], reason,
+                               lambda: self.client.followup(reason, batch, item))
                     self.state.pending = []
                 self.state.delivered.append(dictation_id)
+                self._landed()
                 self.state.last_dictation_at = self.clock()
                 self.log(f"dictée {dictation_id} : {'inject' if reason is None else 'followup/' + reason}")
             if not blocked:
@@ -348,12 +420,16 @@ class Feeder:
     def maybe_pause_followup(self) -> None:
         remaining = self.pause_due()
         if remaining is not None and remaining <= 0:
-            self.client.followup("pause", self._items(self.state.pending), None)
+            batch = self._items(self.state.pending)  # may raise: nothing sent, pending kept
+            self._send(self.state.pending, "pause", lambda: self.client.followup("pause", batch, None))
             self.log(f"pause ≥ {self.config.pause_seconds:g} s : followup ({len(self.state.pending)} dictée(s))")
             self.state.pending = []
+            self._landed()
             self.state.save(self.state_path)
 
     def step(self, wait: float) -> bool:
+        if not self._resumed:
+            self.resume_inflight()
         blocked = self.process(self.api.list(self.state.cursor, wait))
         self.maybe_pause_followup()
         return blocked
@@ -382,7 +458,7 @@ def read_seed(path: Path) -> str:
     return text
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dictation_feeder", description="Transmet les dictées VoxLocal terminées à l'agent dsh.")
     parser.add_argument("--api-url", default=os.environ.get("VOXLOCAL_API_URL", "http://127.0.0.1:47367"))
     parser.add_argument("--state-file", type=Path, default=Path(__file__).resolve().parent / "state" / "state.json")
@@ -396,10 +472,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--end-words", default=",".join(DEFAULT_END_WORDS))
     parser.add_argument("--command-prefixes", default=",".join(DEFAULT_COMMAND_PREFIXES))
     parser.add_argument("--dsh-home", default=os.environ.get("DSH_HOME"))
-    parser.add_argument("--dsh-profile", default="sdk")
+    parser.add_argument("--dsh-profile", default=DEFAULT_DSH_PROFILE,
+                        help="profil dsh du backend sdk (défaut scribe : le profil clinique de harness/run-web.sh)")
     parser.add_argument("--session-id", default="voxlocal-scribe")
     parser.add_argument("--provider")
     parser.add_argument("--model")
+    return parser
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     token = os.environ.get("VOXLOCAL_API_TOKEN", "")
     if not token:
