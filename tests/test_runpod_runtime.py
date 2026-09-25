@@ -176,6 +176,7 @@ class RunpodImageTests(unittest.TestCase):
             self.assertNotIn(forbidden, text)
         self.assertNotRegex(text, r"(?mi)^(ENV|ARG) \S*(TOKEN|SECRET|PASSWORD)")
 
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "bash and POSIX file modes required")
     def test_shell_scripts_parse(self):
         for script in sorted(RUNPOD.glob("*.sh")):
             with self.subTest(script=script.name):
@@ -249,6 +250,7 @@ class RunpodImageTests(unittest.TestCase):
         self.assertIn('exec bash "$ROOT_DIR/start-all.sh"', text)
 
 
+@unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "bash and POSIX file modes required")
 class StartAllTlsTests(unittest.TestCase):
     def _run(self, directory, key_mode, extra_env=None):
         token = Path(directory) / "api-token"
@@ -302,6 +304,7 @@ class ReadyHandler(BaseHTTPRequestHandler):
         pass
 
 
+@unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "bash and POSIX file modes required")
 class WaitReadyTests(unittest.TestCase):
     def _server(self, delay):
         handler = type("Handler", (ReadyHandler,), {"ready_after": time.monotonic() + delay})
@@ -335,6 +338,7 @@ class WaitReadyTests(unittest.TestCase):
         self.assertEqual(self._run("5s", "http://127.0.0.1:8001/health").returncode, 2)
 
 
+@unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "bash and POSIX file modes required")
 class DeployGuardTests(unittest.TestCase):
     def _run(self, path_dirs, api_key=None):
         env = {key: value for key, value in os.environ.items() if key != "RUNPOD_API_KEY"}
@@ -480,7 +484,8 @@ class BenchmarkTests(unittest.TestCase):
         latencies = [sample["latency_ms"] for sample in chat["samples"]]
         self.assertEqual(chat["latency_ms"]["p95"], round(max(latencies), 2))
         self.assertEqual(chat["latency_ms"]["p50"], round(sorted(latencies)[1], 2))
-        self.assertGreaterEqual(chat["latency_ms"]["p50"], 50)
+        # Timer granularity on Windows lets a 50 ms sleep return a few ms early.
+        self.assertGreaterEqual(chat["latency_ms"]["p50"], 40)
         for sample in chat["samples"]:
             self.assertEqual(sample["completion_tokens"], 40)
             expected = 40 / (sample["latency_ms"] / 1000)
