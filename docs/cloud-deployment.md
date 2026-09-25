@@ -106,7 +106,17 @@ Variables utiles :
 
 Les modèles par défaut sont vérifiés par SHA-256 ; un autre modèle doit venir
 avec son empreinte (ou une valeur vide, explicitement non vérifiée). Ce sont des
-points de départ pour la mesure, pas un choix clinique.
+points de départ pour la mesure, pas un choix clinique. Un modèle déjà présent
+sur le volume est revérifié à chaque démarrage : en cas d’écart, il est mis de
+côté (`<nom>.corrupt-<horodatage>`, à supprimer après examen) puis retéléchargé.
+
+`runpodctl` reçoit l’environnement du Pod en ligne de commande (`--env` en
+JSON) : chaque valeur est visible dans la liste des processus du poste
+d’administration. `deploy.sh` refuse donc une URL de modèle qui contient une
+query (`?`), `token=` ou des identifiants (`user:motdepasse@`). Pour une URL
+signée, créez un secret RunPod qui la contient et passez sa référence :
+`WHISPER_MODEL_URL='{{ RUNPOD_SECRET_<nom> }}'`. Dans le Pod, l’URL est
+transmise à `curl` par un fichier de configuration, jamais en argument.
 
 ## Le token
 

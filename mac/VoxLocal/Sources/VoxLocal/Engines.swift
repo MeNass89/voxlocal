@@ -41,8 +41,10 @@ enum ProcessRunner {
         try? stdout.close(); try? stderr.close()
         let out = (try? Data(contentsOf: stdoutURL)) ?? Data()
         let err = (try? Data(contentsOf: stderrURL)) ?? Data()
-        let output = String(data: out, encoding: .utf8) ?? ""
-        let errors = String(data: err, encoding: .utf8) ?? ""
+        // Lossy decoding: llama-cli cuts a long prompt echo at a byte count, which can
+        // split a multi-byte character; strict decoding would drop the whole output.
+        let output = String(decoding: out, as: UTF8.self)
+        let errors = String(decoding: err, as: UTF8.self)
         guard process.terminationStatus == 0 else {
             let detail = String(errors.trimmingCharacters(in: .whitespacesAndNewlines).suffix(4_000))
             throw VoxError.message("\(executable.lastPathComponent) a échoué\(detail.isEmpty ? "." : " : \(detail)")")
@@ -127,15 +129,26 @@ final class LLMEngine {
     }
 
     /// The llama-cli of this llama.cpp revision is an interactive client: stdout
-    /// carries a loading spinner, a banner, the echoed prompt ("> …") and a final
+    /// carries a loading spinner, a banner, the echoed prompt and a final
     /// "Exiting...". Keep only what follows the echoed prompt.
     static func answer(fromCLIOutput output: String, user: String) -> String {
         var text = output
         if let exit = text.range(of: "Exiting...", options: .backwards) { text = String(text[..<exit.lowerBound]) }
-        let prompt = user.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !prompt.isEmpty, let echo = text.range(of: "> " + prompt, options: .backwards) {
-            text = String(text[echo.upperBound...])
-        }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Without the echo the output is banner or error text, never an answer:
+        // return nothing so the caller reports an empty answer instead of pasting it.
+        guard let marker = echoMarker(user: user), let echo = text.range(of: marker, options: .backwards) else { return "" }
+        return String(text[echo.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The echo llama-cli prints for a prompt read with `-f` (tools/cli/cli-ui.h):
+    /// the file minus one trailing newline, as `> <prompt>\n` up to 500 bytes, else
+    /// `> <first 500 bytes> ... (truncated)\n`. The byte cut may split a character;
+    /// lossy decoding yields the same replacement character as the decoded stdout.
+    static func echoMarker(user: String) -> String? {
+        var bytes = Array(user.utf8)
+        if bytes.last == UInt8(ascii: "\n") { bytes.removeLast() }
+        guard !bytes.isEmpty else { return nil }
+        guard bytes.count > 500 else { return "> " + String(decoding: bytes, as: UTF8.self) + "\n" }
+        return "> " + String(decoding: bytes.prefix(500), as: UTF8.self) + " ... (truncated)\n"
     }
 }

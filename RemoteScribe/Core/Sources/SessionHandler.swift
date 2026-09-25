@@ -12,6 +12,8 @@ public final class RemoteSessionHandler {
     private let peer: String
     private let sender: Sender
     private var pairedDeviceName: String?
+    /// Set once a PAIR is accepted: the contract is "PAIR first, once", as on the Python hosts.
+    private var pairedOnce = false
     private var receiver: RemoteAudioReceiver?
     private var activeBackend: RemoteScribeBackend?
 
@@ -39,6 +41,7 @@ public final class RemoteSessionHandler {
 
     public func handle(_ frame: RemoteFrame) {
         do {
+            if frame.kind != .pair && pairedDeviceName == nil { throw RemoteScribeError.notPaired }
             switch frame.kind {
             case .pair: try pair(frame)
             case .startSession: try start(frame)
@@ -60,6 +63,8 @@ public final class RemoteSessionHandler {
     }
 
     private func pair(_ frame: RemoteFrame) throws {
+        guard !pairedOnce else { throw RemoteScribeError.protocolViolation("PAIR déjà reçu") }
+        guard frame.sessionID == RemoteFrame.noSession else { throw RemoteScribeError.protocolViolation("PAIR sans session") }
         let request = try frame.decode(PairRequest.self)
         guard request.protocolVersion == RemoteScribeProtocol.version else {
             throw RemoteScribeError.protocolViolation("version \(request.protocolVersion) non prise en charge")
@@ -75,6 +80,7 @@ public final class RemoteSessionHandler {
             pairingGate?.recordSuccess(peer: peer)
         }
         pairedDeviceName = request.deviceName
+        pairedOnce = true
         let available = RemoteBackendKind.allCases.filter { backends[$0] != nil }
         sender(try .json(kind: .pair, value: PairResponse(
             accepted: true,

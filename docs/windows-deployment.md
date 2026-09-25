@@ -8,7 +8,9 @@ un coffre de secrets (Credential Manager/DPAPI ou équivalent) et un wrapper sig
 
 ## Pré-requis
 
-- Windows 10/11 x64, PowerShell 5.1 ou plus récent ;
+- Windows 10/11 x64, PowerShell 5.1 ou plus récent. Les lanceurs sont testés
+  sous PowerShell 7 ; sous Windows PowerShell 5.1, ils sont analysés mais pas
+  exécutés en CI ;
 - Python 3.11+ déjà installé et accessible par `python`, `python3` ou `py -3` ;
 - droits administrateur pour le chemin ProgramData, les tâches et le pare-feu ;
 - `openssl.exe` pour générer l’identité TLS de l’hôte : celui de Git for

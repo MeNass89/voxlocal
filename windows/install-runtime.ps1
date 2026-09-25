@@ -93,7 +93,22 @@ $sitePackages = (& $venvPython -c 'import sysconfig; print(sysconfig.get_paths()
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sitePackages) -or -not (Test-Path -LiteralPath $sitePackages -PathType Container)) {
     throw 'Could not locate the venv site-packages directory.'
 }
-Set-Content -LiteralPath (Join-Path $sitePackages 'voxlocal.pth') -Value $src -Encoding ASCII -NoNewline
+# Python 3.11 decodes a .pth with the ANSI code page, 3.12+ as UTF-8 first, so a
+# raw accented path (e-acute in C:\Equipe) cannot be right for both. Write one
+# ASCII-only import line instead: every non-ASCII character, backslash and quote
+# becomes a Python \u/\U escape, which both versions read identically.
+$literal = New-Object System.Text.StringBuilder
+for ($i = 0; $i -lt $src.Length; $i++) {
+    $char = $src[$i]
+    if ([char]::IsHighSurrogate($char) -and $i + 1 -lt $src.Length -and [char]::IsLowSurrogate($src[$i + 1])) {
+        [void]$literal.AppendFormat('\U{0:x8}', [char]::ConvertToUtf32($char, $src[$i + 1])); $i++
+    } elseif ([int]$char -lt 0x20 -or [int]$char -gt 0x7E -or $char -eq [char]'\' -or $char -eq [char]'"') {
+        [void]$literal.AppendFormat('\u{0:x4}', [int]$char)
+    } else {
+        [void]$literal.Append($char)
+    }
+}
+[IO.File]::WriteAllText((Join-Path $sitePackages 'voxlocal.pth'), "import sys; sys.path.append(`"$($literal.ToString())`")", (New-Object Text.UTF8Encoding($false)))
 # Verify from outside the checkout so the import resolves through the .pth entry.
 Push-Location $env:TEMP
 try {

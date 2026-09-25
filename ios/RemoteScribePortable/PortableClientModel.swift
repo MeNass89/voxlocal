@@ -324,17 +324,31 @@ final class PortableClientModel: ObservableObject {
         else { return }
         pendingLinkServerName = nil
         // The case-insensitive fallback may match a Bonjour name that differs from
-        // the link's; connect(to:) looks the pin up under the discovered name.
+        // the link's; connect(to:) looks the pin up under the discovered name. That
+        // name may already hold its own pin: never overwrite it with the link's.
         if server.name != name,
            let pin = memoryPins[name] ?? (try? SecurePairingStore.loadData(account: Keys.pin(name))) {
-            do {
-                try SecurePairingStore.saveData(pin, account: Keys.pin(server.name))
-                memoryPins[server.name] = nil
-            } catch {
-                memoryPins[server.name] = pin
+            let existing = memoryPins[server.name] ?? (try? SecurePairingStore.loadData(account: Keys.pin(server.name)))
+            guard let resolved = Self.resolvePinForDiscoveredName(existing: existing, linked: pin) else {
+                errorText = "Ce poste a déjà une empreinte différente. Oubliez d’abord « \(server.name) » dans les réglages de connexion, puis rescannez."
+                return
+            }
+            if existing == nil {
+                do {
+                    try SecurePairingStore.saveData(resolved, account: Keys.pin(server.name))
+                    memoryPins[server.name] = nil
+                } catch {
+                    memoryPins[server.name] = resolved
+                }
             }
         }
         connect(to: server)
+    }
+
+    /// Pin to use for a Bonjour name matched case-insensitively to a pairing link:
+    /// the link's when the name has none or the same one, nil on conflict.
+    nonisolated static func resolvePinForDiscoveredName(existing: Data?, linked: Data) -> Data? {
+        pinConflict(previous: existing, incoming: linked) ? nil : linked
     }
 
     private func armNoServerWatchdog() {
@@ -864,9 +878,18 @@ final class PortableClientModel: ObservableObject {
         catch { storageMessage = "Code utilisé en mémoire uniquement : \(error.localizedDescription)" }
     }
 
-    private var normalizedPairingCode: String? {
-        let value = pairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : value
+    private var normalizedPairingCode: String? { Self.normalizePairingCode(pairingCode) }
+
+    /// The Mac displays its code as "ABCD-2345" and expects "ABCD2345" on the wire.
+    /// A code of that shape (8 characters of the Mac alphabet, with an optional dash
+    /// or space in the middle, any case) is sent dashless and uppercase. Any other
+    /// code, such as one chosen by an operator for the Python host, is sent as typed.
+    nonisolated static func normalizePairingCode(_ typed: String) -> String? {
+        let value = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        let macCode = value.range(of: "^[A-HJ-NP-Za-hj-np-z2-9]{4}[- ]?[A-HJ-NP-Za-hj-np-z2-9]{4}$", options: .regularExpression) != nil
+        guard macCode else { return value }
+        return value.filter { $0 != "-" && $0 != " " }.uppercased()
     }
 
     private func isLoopbackHost(_ host: String) -> Bool {

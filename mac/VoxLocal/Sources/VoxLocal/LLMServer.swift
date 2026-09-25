@@ -59,6 +59,10 @@ final class LLMServerController {
     private var process: Process?
     private var configuration: Configuration?
     private var endpoint: LLMServerEndpoint?
+    /// PID whose listener `listenerOwned` confirmed for `endpoint`. The endpoint (and
+    /// its API key) is handed out only while that same process is still running:
+    /// once it dies, its port is free for any local process to take.
+    private var verifiedPID: pid_t?
     private var starting: (configuration: Configuration, task: Task<LLMServerEndpoint, Error>)?
     private var generation = 0
     private var pidFile: URL { paths.root.appendingPathComponent("run/llama-server.pid") }
@@ -95,7 +99,8 @@ final class LLMServerController {
     /// restarting `llama-server` when the model or context changed.
     func ensure(model: URL, context: Int) async throws -> LLMServerEndpoint {
         let wanted = Configuration(model: model.standardizedFileURL, context: max(1024, context))
-        if wanted == configuration, let endpoint, process?.isRunning == true { return endpoint }
+        if wanted == configuration, let endpoint, let process, process.isRunning,
+           process.processIdentifier == verifiedPID { return endpoint }
         if let starting, starting.configuration == wanted { return try await starting.task.value }
         stop()
         generation += 1
@@ -115,7 +120,7 @@ final class LLMServerController {
             while process.isRunning && Date() < deadline { usleep(20_000) }
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         }
-        process = nil; endpoint = nil; configuration = nil
+        process = nil; endpoint = nil; configuration = nil; verifiedPID = nil
         try? FileManager.default.removeItem(at: pidFile)
     }
 
@@ -166,7 +171,7 @@ final class LLMServerController {
                     throw VoxError.message("le port de llama-server a été pris par un autre processus")
                 }
                 let ready = LLMServerEndpoint(baseURL: base, apiKey: apiKey)
-                endpoint = ready; configuration = wanted
+                endpoint = ready; configuration = wanted; verifiedPID = pid
                 return ready
             }
             try await Task.sleep(nanoseconds: Self.healthPollInterval)

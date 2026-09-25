@@ -305,8 +305,11 @@ aux modèles trop gros pour le poste.
 - Requêtes LLM avec `store: false` ; en-têtes `Cache-Control: no-store` et
   `X-Remote-Scribe-ZDR: required`. Cet en-tête est un signal : il ne prouve
   rien sur le comportement du fournisseur.
-- Pas de redirection suivie, pas de proxy hérité de l’environnement, réponses
-  plafonnées (4 Mio sur Mac), CA privée possible (`--gpu-ca-file`).
+- Pas de redirection suivie, pas de proxy hérité de l’environnement, CA privée
+  possible (`--gpu-ca-file`).
+- Sur Mac, une réponse de plus de 4 Mio est rejetée une fois reçue : la limite
+  borne ce qui est analysé, pas la mémoire utilisée pendant la réception, car
+  la réponse n’est pas lue en flux.
 
 **La conception RunPod livrée.** Un Pod privé fait tourner `whisper-server` et
 `llama-server` sur `127.0.0.1`, derrière une seule porte HTTPS en TLS 1.3 qui
