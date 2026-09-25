@@ -15,7 +15,7 @@ Plan de la vague 3 : [`docs/superpowers/plans/2026-09-25-voxlocal-wave3-harness.
 | Flux de dictée (`voxlocal-tools`, feeder) | [`plugins/voxlocal-tools/`](plugins/voxlocal-tools), [`ingest/`](ingest) | H2 fait |
 | Pont portail + mock enregistré (`portail-tools`) | [`bridge/`](bridge), [`plugins/portail-tools/`](plugins/portail-tools) | H3 fait |
 | Feu vert, audit, persona, boucle | [`plugins/scribe-approval/`](plugins/scribe-approval), [`plugins/scribe-persona/`](plugins/scribe-persona), [`tests/test_loop.py`](tests/test_loop.py) | H4 fait |
-| Démo de bout en bout | — | H5 |
+| Démo de bout en bout | [`demo/`](demo/README.md) | H5 fait |
 | Lanceur Windows, CI | — | H6 |
 
 ## Architecture
@@ -66,6 +66,10 @@ harness/run-web.sh                                   # dsh --profile scribe --no
 Optionnel : `PORTAIL_BRIDGE_URL` (défaut `http://127.0.0.1:47368/`), `SCRIBE_APPROVALS_AUDIT` (défaut `harness/audit/approvals.jsonl`).
 
 Le script installe `dsh` au verrou près (`pnpm install --frozen-lockfile`), place le Harness home dans `harness/.dsh-home/` (ignoré par git), y relie le profil `scribe`, puis imprime une ligne `dsh web: http://127.0.0.1:3080/?token=…`. Ouvrir cette URL dans le navigateur du poste. Les options suivantes vont à l’app web (`--port 3081`, par exemple).
+
+## Démo de bout en bout
+
+`bash harness/demo/run-demo.sh --check` puis `bash harness/demo/run-demo.sh` : API de dictées en mock, feeder, pont sur le portail enregistré, modèle scripté (ou `--provider local|pod`), chat `dsh`. Mode d’emploi : [`demo/README.md`](demo/README.md) ; script de 90 secondes : [`docs/demo-runbook.md`](../docs/demo-runbook.md#parcours-agent).
 
 ## Posture de sécurité
 

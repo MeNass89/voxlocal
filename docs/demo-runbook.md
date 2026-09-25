@@ -61,6 +61,59 @@ phrases à dicter sont fictives.
 4. Pour rejouer l’appairage complet : iPhone → **Oublier ce poste**, puis Mac →
    **Régénérer** le code. Le scan de la démo suivante repartira de zéro.
 
+## Parcours agent
+
+Second script de 90 secondes, après la dictée : ce que devient la dictée une fois
+sur le poste. Un agent la lit, prépare les modifications du dossier patient et
+n’écrit rien sans le feu vert du médecin. Portail simulé (mock enregistré du
+portail patient), patient fictif, modèle scripté : le déroulé est identique à
+chaque passage. Détails techniques : [`harness/demo/README.md`](../harness/demo/README.md).
+
+### Préparation (5 minutes)
+
+1. Poste macOS avec Node ≥ 22.19, pnpm, Python ≥ 3.11. Une fois :
+   `(cd harness/profile && pnpm install --frozen-lockfile)`.
+2. Depuis la racine du dépôt : `bash harness/demo/run-demo.sh --check` doit finir
+   par « Tout est prêt. ».
+3. `bash harness/demo/run-demo.sh`, puis ouvrir dans le navigateur l’URL
+   imprimée à la ligne `Chat du médecin (dsh web)`. Cliquer **Continue** sur
+   l’avertissement de préversion. Le message de la dictée est déjà dans le
+   presse-papier.
+4. Fenêtre du navigateur en plein écran, zoom 100 %.
+
+### Le script
+
+| Temps | À l’écran | À dire |
+|---|---|---|
+| 0:00–0:10 | Chat vide, preset « Scribe clinique », modèle « Qwen3.8 27B » | « La dictée que vous venez de voir arrive ici, sur le poste, dans le chat de l’agent. En service, l’agent tourne sur notre GPU privé ; pour cette démo, ses réponses sont scriptées, tout le reste est réel. Il n’a ni terminal ni accès aux fichiers. » |
+| 0:10–0:20 | Coller le message (Cmd-V), Entrée : la bulle « Nouvelle dictée … Patient déclaré : pat-001 » | « Chaque dictée terminée lui parvient avec son identifiant et le patient déclaré par le médecin avant de dicter. » |
+| 0:20–0:40 | L’agent travaille : « Calling tools ». Ouvrir le groupe d’outils, puis les deux lignes `record_draft_edit` | « Il lit le dossier, puis prépare un brouillon par section : l’examen clinique, puis l’orientation. Chaque phrase proposée s’appuie sur une citation mot pour mot de la dictée ; le pont vers le portail vérifie que la citation existe bien. Rien n’est encore écrit. » |
+| 0:40–0:55 | Carte orange « Waiting for approval » : patient, rencontre, section, texte inchangé, AJOUT, citations | « Pour écrire, il doit demander. Le médecin voit le patient, la rencontre, la section, le texte exact qui sera ajouté et les citations. Sans réponse, rien ne part. » |
+| 0:55–1:10 | **Allow once**, puis **Allow once** pour la seconde section ; ouvrir les lignes `record_apply` : « Appliqué … version 3 → 4, sauvegarde … » | « Un clic par modification. Le feu vert ne vaut que pour ce brouillon-là, pendant dix minutes, une seule fois. Le portail confirme la nouvelle version et garde une sauvegarde. » |
+| 1:10–1:25 | Écrire : « Annulez l’ajout dans l’orientation : je le reprendrai moi-même. » Entrée ; nouvelle carte de feu vert « Annuler une modification » ; **Allow once** ; ligne `record_restore` : « Restauré … » | « Le médecin garde la main : il demande d’annuler, l’agent restaure la sauvegarde, et cette annulation passe elle aussi par son feu vert. » |
+| 1:25–1:30 | Même écran | « Chaque décision est inscrite dans un journal d’audit, sans texte clinique. Le jour où l’accès au portail de l’hôpital est ouvert, on remplace la simulation par le vrai portail, derrière la même interface. » |
+
+### Si quelque chose casse
+
+- **`--check` signale un port occupé.** Une démo précédente tourne encore :
+  Ctrl-C dans son terminal. Sinon `lsof -nP -iTCP:3081 -sTCP:LISTEN` montre le
+  processus ; `--port 3082` déplace l’interface web.
+- **L’agent ne répond pas.** Relancer le script : chaque exécution repart d’un
+  dossier neuf et d’un chat vide. Les journaux sont dans le dossier imprimé à la
+  sortie (`logs/`).
+- **Pas de réseau, pas de navigateur fiable.** Montrer les cinq captures
+  `docs/superpowers/evidence/2026-09-25-harness-demo-*.png`, produites par
+  `bash harness/demo/run-demo.sh --drive --shots <dossier>`.
+- **Question sur le vrai modèle.** Avec le Pod allumé :
+  `VOXLOCAL_LLM_URL=https://<pod>:8443/llm/v1 VOXLOCAL_LLM_TOKEN=… bash harness/demo/run-demo.sh --provider pod`
+  (Qwen3.8-27B). Le déroulé n’est alors plus scripté.
+
+### Ce qu’il ne faut pas promettre
+
+La dictée est collée dans le chat : la livraison automatique du feeder dans une
+session `dsh` ouverte reste à faire. Le portail est simulé. La démo n’a pas
+encore été jouée avec Qwen3.8-27B.
+
 ## En coulisses : l’API agent et le banc GPU
 
 Ces deux parcours s’adressent à un public technique ; ils n’entrent pas dans les
