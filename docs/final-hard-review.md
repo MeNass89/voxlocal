@@ -53,6 +53,8 @@ Patch recommandé :
 
 Mesure compensatoire documentée : VLAN clinique filtré ou WireGuard pair-à-pair, données non cliniques uniquement tant que ce P0 n'est pas fermé.
 
+État 2026-09-25 : identité TLS serveur, pinning iOS TOFU et code d’appairage obligatoire livrés ; mTLS/enrôlement MDM restent une porte pilote. Le serveur Swift et l’hôte Python imposent TLS 1.3 ; le client iOS n’accepte le clair que vers loopback ; un QR code ne remplace jamais une empreinte déjà épinglée. VoxLocal exige macOS 15 pour importer l’identité TLS en mémoire seulement (`kSecImportToMemoryOnly`).
+
 #### P0-2 — « ZDR » n'est pas une propriété démontrée du GPU loué
 
 Preuves :
@@ -68,6 +70,8 @@ Patch recommandé : obtenir un DPA et une fiche de configuration du fournisseur 
 Le pairing code reste un secret statique transporté dans le protocole v1, sans challenge, expiration ni révocation d'appareil. Le serveur canonique ajoute désormais rate limiting et plafonds de connexions ; l'hôte legacy n'offre pas le même niveau de garde-fous.
 
 Patch recommandé : enrôlement par appareil, nonce/challenge signé ou mTLS, rotation/révocation, rate limiting global et par appareil, limite de connexions et métriques d'abus. Conserver le pairing code uniquement pour bootstrap local contrôlé.
+
+État 2026-09-25 : le code d’appairage est obligatoire sur tous les hôtes et ne circule que dans TLS. Le serveur Swift bloque une adresse 60 s après 5 échecs dans une fenêtre de 10 minutes sans affecter les autres appareils (`RemoteScribe/Core/Sources/PairingGate.swift`, testé) ; l’hôte Python refuse une adresse qui compte 5 échecs en 60 s. L’enrôlement par appareil, la rotation et la révocation individuelle restent ouverts.
 
 ### P1 — Risques élevés de stabilité ou d'interopérabilité
 
@@ -134,14 +138,19 @@ Action : afficher le serveur réellement appairé et ajouter le pin de certifica
 
 ## Vérifications exécutées
 
+État au 25 septembre 2026, depuis la racine du dépôt :
+
 ```text
 python3 -m unittest discover -s windows -p 'test_*.py' -v   # 5 OK
-python3 -m unittest discover -s tests -p 'test_*.py' -v     # 8 OK (dont 2 Core Swift)
-python3 -m py_compile server/voxlocal_server.py windows/*.py # OK
-swiftc -typecheck ios/Core/Sources/*.swift                 # OK
+python3 -m unittest discover -s tests -p 'test_*.py' -v     # 24 OK (dont Core Swift, fixture TLS avec épinglage, interop RemoteScribeHost)
+python3 -m unittest discover -s agent -p 'test_*.py' -v     # 9 OK
+(cd RemoteScribe && swift test)                             # 8 OK
+(cd mac/VoxLocal && swift build -c release --product VoxLocal)   # OK
+xcodebuild … -sdk iphonesimulator … test                    # 8 XCTest OK (RemoteScribePortableTests)
+xcodebuild -quiet -project ios/RemoteScribePortable.xcodeproj -target RemoteScribePortable -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO build   # OK
 ```
 
-La compilation Xcode/iOS et le test réel TLS n'ont pas été exécutés dans cet environnement (SDK, certificats et réseau hospitalier absents).
+La CI GitHub Actions (run 36127942402, commit `ac5d15c`) exécute ces suites sur ubuntu, Windows et macOS : quatre jobs verts. Le test TLS réel sur un iPhone physique et dans un réseau hospitalier reste à faire.
 
 ## Décision de mise en service
 

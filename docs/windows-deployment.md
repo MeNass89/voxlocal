@@ -76,7 +76,7 @@ Un certificat émis par l’IT reste possible avec `-TlsCert`/`-TlsKey` à la pl
 de `-TlsDir` (les deux sont exclusifs). Le script refuse wildcard/loopback en
 production et refuse une tâche serveur sans `-TlsDir` ni certificat.
 `-GpuCAFile` permet de fournir la CA privée du gateway GPU lorsque le trust
-store Windows standard ne suffit pas. Configure ensuite les variables `VOXLOCAL_PAIRING_CODE`,
+store Windows standard ne suffit pas. Configurez ensuite les variables `VOXLOCAL_PAIRING_CODE`,
 `VOXLOCAL_GPU_URL`, `VOXLOCAL_GPU_TOKEN` et éventuellement les variables LLM dans
 le coffre de secrets du compte qui exécute la tâche. Les tokens ne doivent jamais
 être passés comme arguments PowerShell.
@@ -109,7 +109,8 @@ chaque iPhone devra approuver.
 
 Le runtime Windows est prêt pour une démonstration et un harnais d’intégration.
 La mise en service clinique demande encore la signature du code, l’identité
-mTLS/pinning et l’enrôlement/révocation des appareils, le stockage des secrets
+client mTLS et l’enrôlement/révocation des appareils (l’épinglage du certificat
+serveur par l’iPhone est livré), le stockage des secrets
 par l’IT, le DPA/ZDR du fournisseur GPU et une validation DPO/clinique. Le hôte
 `windows/remotescribe_host.py` reste un compatibiliteur TCP pour données
 synthétiques ; `server/voxlocal_server.py` est le chemin de référence TLS.

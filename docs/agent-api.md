@@ -93,6 +93,13 @@ powershell -ExecutionPolicy Bypass -File .\agent\run-windows.ps1
 
 Les scripts d'agents doivent vérifier `ok` et `error.code`, conserver le `requestId`, et traiter `retryable=true` avec une file bornée et backoff. Ils ne doivent pas réessayer automatiquement une transcription après un résultat `completed`.
 
+## Tests
+
+`python3 -m unittest discover -s agent -p 'test_*.py' -v` exécute les 9 tests de
+l'API et du CLI (25 septembre 2026) : Bearer, contrats JSON, JSON strict,
+limites, erreurs amont, timeouts, refus de l'HTTP distant et profil mock
+hermétique.
+
 ## Limites et chemin de production
 
 Cette passerelle ne signe pas de conformité RGPD. Avant des données patient, l'hôpital doit valider le DPA/ZDR, la région, les journaux et la rétention du fournisseur, puis remplacer le simple token local par un enrôlement d'appareil (mTLS ou équivalent). Pour un poste partagé, installer le serveur comme service Windows avec un compte dédié et une ACL sur ses secrets. Le mode `--mock` est le seul mode de développement sans certificat TLS côté GPU.
