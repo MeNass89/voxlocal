@@ -11,7 +11,10 @@ un coffre de secrets (Credential Manager/DPAPI ou équivalent) et un wrapper sig
 - Windows 10/11 x64, PowerShell 5.1 ou plus récent ;
 - Python 3.11+ déjà installé et accessible par `python`, `python3` ou `py -3.11` ;
 - droits administrateur pour le chemin ProgramData, les tâches et le pare-feu ;
-- certificat serveur, clé privée et, si retenu, CA client gérée par l’hôpital ;
+- `openssl.exe` pour générer l’identité TLS de l’hôte : celui de Git for
+  Windows (`C:\Program Files\Git\usr\bin\openssl.exe`), un `openssl` du
+  `PATH` ou `$env:OPENSSL_EXE` ; ou bien un certificat serveur et sa clé fournis
+  par l’IT ; et, si retenu, une CA client gérée par l’hôpital ;
 - un poste et un VLAN clinique documentés. Le mode mock ne sert qu’aux données
   synthétiques et reste sur loopback.
 
@@ -40,21 +43,35 @@ interactive et n’est pas un service Windows ; pour un pilote, injecter les
 secrets avec le coffre approuvé de l’hôpital plutôt que dans le profil ou la
 commande de la tâche.
 
-Pour un serveur réel, fournir une interface clinique explicite et TLS :
+Pour un serveur réel, fournir une interface clinique explicite et TLS. Avec
+`-TlsDir`, l’installateur génère l’identité TLS de l’hôte dans ce dossier (RSA
+2048 auto-signé, 10 ans, SAN `<hôte>.local`, `localhost`, `127.0.0.1`) par
+[`new-tls-identity.ps1`](../windows/new-tls-identity.ps1), la réutilise aux
+installations suivantes et ne laisse la clé lisible que par le compte courant :
 
 ```powershell
 .\windows\install-runtime.ps1 `
   -RegisterScheduledTask -ScheduledTask Server `
   -BindAddress 10.42.5.20 `
-  -TlsCert C:\VoxLocal\certs\server.pem `
-  -TlsKey C:\VoxLocal\certs\server-key.pem `
+  -TlsDir C:\ProgramData\VoxLocal\tls `
   -TlsClientCA C:\VoxLocal\certs\hospital-client-ca.pem `
   -GpuCAFile C:\VoxLocal\certs\runpod-ca.pem
 ```
 
-Le script refuse wildcard/loopback en production et refuse une tâche serveur sans
-certificat. `-GpuCAFile` permet de fournir la CA privée du gateway GPU lorsque
-le trust store Windows standard ne suffit pas. Configure ensuite les variables `VOXLOCAL_PAIRING_CODE`,
+L’installateur affiche l’empreinte SHA-256 du certificat (base64 et hexadécimal
+groupé par 4) et l’écrit dans le manifeste (`tlsFingerprintSha256`). Le serveur
+la journalise aussi au démarrage (`tls_fingerprint_sha256=…`) et la publie dans
+Bonjour (`fp`). À la première connexion, l’iPhone affiche l’empreinte du
+serveur : la comparer avec celle de l’installateur avant de l’approuver. Pour
+régénérer l’identité, lancer `.\windows\new-tls-identity.ps1 -OutputDir
+C:\ProgramData\VoxLocal\tls -Force` ; chaque iPhone devra approuver la nouvelle
+empreinte.
+
+Un certificat émis par l’IT reste possible avec `-TlsCert`/`-TlsKey` à la place
+de `-TlsDir` (les deux sont exclusifs). Le script refuse wildcard/loopback en
+production et refuse une tâche serveur sans `-TlsDir` ni certificat.
+`-GpuCAFile` permet de fournir la CA privée du gateway GPU lorsque le trust
+store Windows standard ne suffit pas. Configure ensuite les variables `VOXLOCAL_PAIRING_CODE`,
 `VOXLOCAL_GPU_URL`, `VOXLOCAL_GPU_TOKEN` et éventuellement les variables LLM dans
 le coffre de secrets du compte qui exécute la tâche. Les tokens ne doivent jamais
 être passés comme arguments PowerShell.
@@ -78,7 +95,10 @@ Prévisualiser puis retirer le runtime :
 
 La désinstallation exige le manifeste créé par l’installation et refuse les
 racines de disque ou un chemin qui ne correspond pas au manifeste. Utiliser
-`-KeepData` si un export contrôlé est nécessaire avant suppression.
+`-KeepData` si un export contrôlé est nécessaire avant suppression. Une identité
+TLS générée sous `-InstallRoot` (par exemple `C:\ProgramData\VoxLocal\tls`) est
+supprimée avec le runtime : une réinstallation produit une nouvelle empreinte que
+chaque iPhone devra approuver.
 
 ## Limites de la version actuelle
 
