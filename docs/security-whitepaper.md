@@ -335,13 +335,100 @@ provisionné** : aucune mesure GPU réelle n’existe à ce jour.
 Un fournisseur qui ne répond pas sur un de ces points doit être traité comme un
 échec de déploiement.
 
-### Ce que votre DPO et votre RSSI doivent encore valider
+## Agent et portail
+
+Le harness clinique ([`harness/`](../harness/README.md)) ajoute un agent sur le
+poste du médecin : il lit une dictée terminée, lit le dossier du patient,
+prépare des modifications section par section et les écrit dans le portail
+patient **seulement après un feu vert humain**. La menace propre à cette couche :
+un modèle qui écrit dans le dossier sans accord, au mauvais patient, ou avec un
+texte qui n’est pas celui que le médecin a vu.
+
+**Le pont décide, pas l’agent.** Toute écriture passe par le pont portail
+([`portail_bridge.py`](../harness/bridge/portail_bridge.py)), un serveur JSON-RPC
+qui n’écoute que sur `127.0.0.1:47368` et refuse les requêtes portant un en-tête
+`Origin`. Le pont stocke chaque brouillon de façon immuable
+(`harness/bridge/drafts.jsonl`) et refuse `apply` et `restore` (403) tant qu’un
+humain n’a pas approuvé **ce brouillon précis**. L’approbation, créée par le pont
+lui-même, est à usage unique, expire au bout de 10 minutes et est liée au
+patient, à la rencontre, à la section, au mode et aux empreintes du texte de
+départ et du texte final. Sous un seul verrou, le pont vérifie l’approbation,
+relit la section et compare son empreinte, écrit une ligne de journal, puis
+écrit dans le portail. Si la section a changé entre-temps ou si le brouillon a
+été modifié, il répond 409. Rejouer un brouillon déjà appliqué, même après un
+redémarrage du pont, ne produit pas de seconde écriture. Une citation qui n’est
+pas une sous-chaîne de la dictée référencée, ou une dictée d’un autre patient,
+fait refuser le brouillon.
+
+**La question au médecin.** Dans le chat web `dsh`, le plugin
+[`scribe-approval`](../harness/plugins/scribe-approval) suspend `record_apply` et
+`record_restore` et affiche le patient, la rencontre, la section, le diff exact
+et les citations. Sur « Allow once », le plugin, jamais le modèle, transmet la
+décision au pont. « Reject », une absence de réponse ou la politique `never` :
+l’outil ne s’exécute pas. Cette porte est l’interface, pas la frontière : un test
+retire le plugin et constate que le pont refuse quand même
+(`test_without_the_harness_gate_the_bridge_still_refuses`,
+[`test_loop.py`](../harness/tests/test_loop.py)).
+
+**Deux jetons.** Les outils du modèle ne portent que `PORTAIL_BRIDGE_TOKEN` : lire,
+préparer un brouillon, demander l’écriture d’un brouillon déjà approuvé.
+`PORTAIL_BRIDGE_APPROVER_TOKEN`, différent (le pont refuse de démarrer si les deux
+sont égaux), ne sert qu’à `approve_draft` ; le jeton outils ne peut pas approuver
+et le jeton approbateur ne peut pas écrire. Les deux viennent de l’environnement,
+jamais d’un argument ni de git.
+
+**Limite connue : les deux jetons vivent dans le même processus.** Le processus
+`dsh` porte le jeton outils et le jeton approbateur. Le modèle ne peut pas lire
+l’environnement : le preset `scribe` n’a ni terminal, ni accès aux fichiers, ni
+sous-agents, et aucun outil exposé au modèle n’appelle `approve_draft`. Si un
+futur outil générique (terminal, lecture de fichiers, exécution de code) était
+ajouté au preset, cette séparation ne tiendrait plus. Placer l’approbateur hors
+du processus `dsh` est l’amélioration prévue avant d’ouvrir de tels outils.
+
+**Ce que le modèle peut atteindre.**
+
+| Peut | Ne peut pas |
+| --- | --- |
+| Lire les dictées (`dictation_list`, `dictation_get`, `dictation_retranscribe`) | Écrire dans le portail sans approbation humaine du brouillon |
+| Chercher un patient, lire ses sections narratives | Approuver un brouillon ou lire un jeton |
+| Créer des brouillons avec citations de la dictée | Modifier un brouillon après approbation |
+| Demander `record_apply` ou `record_restore` d’un brouillon approuvé | Lancer un terminal, lire ou écrire des fichiers, lancer des sous-agents |
+|  | Atteindre le portail directement : seul le pont lui parle |
+
+**Journaux d’audit.** `harness/audit/approvals.jsonl` côté harness (chaque
+décision : autorisé, refusé, annulé, indisponible, relais échoué, puis le
+résultat de l’écriture, avec le nom du médecin tiré de `SCRIBE_CLINICIAN`) et
+`harness/audit/portal-writes.jsonl` côté pont (chaque écriture ou refus, avec
+identifiants, empreintes, identifiant d’approbation et répondant). Identifiants
+et empreintes seulement, jamais le texte clinique. Les brouillons, eux,
+contiennent le texte proposé : `drafts.jsonl` et les dossiers d’audit sont
+ignorés par git, et leur rétention est à définir avec le DPO avant le portail
+réel.
+
+**Le portail est fermé aujourd’hui.** Aucun accès au portail de l’hôpital n’existe
+à ce jour. Le pont tourne sur un mock enregistré
+([`portail_mock.py`](../harness/bridge/portail_mock.py), trois patients
+synthétiques) qui reproduit les contraintes connues du portail : seules les
+sections narratives des documents rattachés à une rencontre sont visibles et
+modifiables, les suggestions sont invisibles, `getItem` exige une version. Le
+client réel ([`RealPortal`](../harness/bridge/portail_bridge.py)) est branché
+derrière la même interface mais n’a jamais été exécuté. Le jour où l’accès
+revient, les identifiants du portail seront lus par le pont seul, jamais par le
+processus `dsh`.
+
+**Pas encore construit.** La boîte à outils médicale (protocoles de soins comme
+« entorse », facturation INAMI, prescriptions via xCare) est la vague 4. La
+persona dit au modèle que ces outils n’existent pas encore, pour qu’il le dise au
+médecin au lieu d’improviser. Le modèle Qwen3.8-27B n’a pas encore été mesuré
+sur le Pod, et le harness n’a pas encore tourné sur un poste Windows.
+
+## Ce que votre DPO et votre RSSI doivent encore valider
 
 - **Identité des appareils** : mTLS ou enrôlement MDM, rotation et révocation
   individuelle ; le code d’appairage seul ne suffit pas pour un pilote élargi.
 - **Rétention sur le Mac** : durée de conservation de l’historique VoxLocal et
   procédure de suppression, avec FileVault activé sur chaque poste.
-- **Fournisseur GPU**, si utilisé : les six points ci-dessus.
+- **Fournisseur GPU**, si utilisé : les six points de la section [Fournisseur GPU](#fournisseur-gpu).
 - **Déploiement du poste** : paquet Windows validé sur un poste réel du parc,
   service Windows signé avec coffre de secrets ; signature Developer ID et
   notarisation du DMG macOS ; signature de distribution de l’app iOS.
@@ -350,5 +437,8 @@ Un fournisseur qui ne répond pas sur un de ces points doit être traité comme 
 - **Validation clinique** : relecture humaine des textes réécrits avant usage,
   procédure d’incident, test de suppression.
 - **Journal d’audit**, si votre établissement l’exige.
+- **Harness clinique**, avant le portail réel : rétention des brouillons et des
+  journaux d’audit, approbateur hors du processus `dsh`, validation clinique
+  des brouillons produits par le modèle retenu.
 
 L’état de chaque porte est suivi dans [`release-readiness.md`](release-readiness.md).

@@ -16,7 +16,7 @@ Plan de la vague 3 : [`docs/superpowers/plans/2026-09-25-voxlocal-wave3-harness.
 | Pont portail + mock enregistré (`portail-tools`) | [`bridge/`](bridge), [`plugins/portail-tools/`](plugins/portail-tools) | H3 fait |
 | Feu vert, audit, persona, boucle | [`plugins/scribe-approval/`](plugins/scribe-approval), [`plugins/scribe-persona/`](plugins/scribe-persona), [`tests/test_loop.py`](tests/test_loop.py) | H4 fait |
 | Démo de bout en bout | — | H5 |
-| Lanceur Windows, CI | — | H6 |
+| Lanceurs Windows, CI | [`run-web.ps1`](run-web.ps1), [`ingest/run-feeder.ps1`](ingest/run-feeder.ps1), job `harness` de [`ci.yml`](../.github/workflows/ci.yml) | H6 fait |
 
 ## Architecture
 
@@ -66,6 +66,21 @@ harness/run-web.sh                                   # dsh --profile scribe --no
 Optionnel : `PORTAIL_BRIDGE_URL` (défaut `http://127.0.0.1:47368/`), `SCRIBE_APPROVALS_AUDIT` (défaut `harness/audit/approvals.jsonl`).
 
 Le script installe `dsh` au verrou près (`pnpm install --frozen-lockfile`), place le Harness home dans `harness/.dsh-home/` (ignoré par git), y relie le profil `scribe`, puis imprime une ligne `dsh web: http://127.0.0.1:3080/?token=…`. Ouvrir cette URL dans le navigateur du poste. Les options suivantes vont à l’app web (`--port 3081`, par exemple).
+
+## Lancer sous Windows (PowerShell)
+
+Même contrat de variables d’environnement, depuis la racine du dépôt :
+
+```powershell
+$env:VOXLOCAL_LLM_URL = 'https://<pod>:8443/llm/v1'
+$env:VOXLOCAL_LLM_TOKEN = '…'                 # depuis le coffre de secrets, jamais en argument
+$env:PORTAIL_BRIDGE_TOKEN = '…'; $env:PORTAIL_BRIDGE_APPROVER_TOKEN = '…'   # deux valeurs différentes
+.\harness\run-web.ps1                         # dsh --profile scribe --no-open ; --port 3081 passe à l’app web
+$env:VOXLOCAL_API_TOKEN = '…'
+.\harness\ingest\run-feeder.ps1 --backend dryrun   # options du feeder transmises telles quelles
+```
+
+`run-web.ps1` refuse un `--host` hors boucle locale et tout `--trusted-host`, refuse une URL HTTP distante pour le modèle et un `PORTAIL_BRIDGE_URL` hors boucle locale, et relie le profil par une jonction (pas de droit administrateur). `run-feeder.ps1` refuse une API de dictées hors boucle locale. Les deux scripts sont exécutés sous `pwsh` 7.6 sur macOS (refus et lancement réel) ; la CI Windows les analyse avec PowerShell 7 et Windows PowerShell 5.1, et le job `harness` les lance sous `pwsh` sur ubuntu et macOS. Ils n’ont pas encore tourné sur un poste Windows.
 
 ## Posture de sécurité
 
