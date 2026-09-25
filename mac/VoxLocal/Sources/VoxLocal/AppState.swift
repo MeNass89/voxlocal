@@ -70,6 +70,13 @@ final class AppState: ObservableObject {
     @Published var cloudTestRunning = false
     @Published var cloudTestMessage: String?
     @Published var showPermissionSetup = !UserDefaults.standard.bool(forKey: "permissions.onboardingCompleted")
+    /// Loopback API for the local agent harness (Réglages › iPhone › Harness local).
+    @Published var localAPIRunning = false
+    @Published var localAPIStatus = "Désactivé"
+    @Published var localAPIToken: String?
+    /// Patient declared by the harness; stamped on each new dictation.
+    @Published var patientContext: String?
+    private var localAPI: LocalAPIServer?
 
     /// `preview` renders screens without touching the real Keychain pairing code
     /// and without starting llama-server.
@@ -120,6 +127,7 @@ final class AppState: ObservableObject {
         remoteScribe.onRunningChanged = { [weak self] running in self?.remoteScribeRunning = running }
         remoteBackend = remoteScribe.defaultBackend
         remoteScribe.start()
+        if settings.localApiEnabled == true { startLocalAPI() }
     }
 
     var activeMode: Mode? { modes.first { $0.id == settings.activeModeId } }
@@ -131,6 +139,7 @@ final class AppState: ObservableObject {
     func reloadModes() { modes = modeRepository.list(); if selectedModeID == nil { selectedModeID = settings.activeModeId } }
     func reloadHistory() {
         history = historyRepository.list(); if selectedHistoryID == nil { selectedHistoryID = history.first?.id }
+        localAPI?.notifyHistoryChanged()
         remoteDictations = Array(history.lazy.compactMap { record -> RemoteDictationSummary? in
             guard let device = VoxLocalRemoteBackend.remoteDevice(of: record) else { return nil }
             return RemoteDictationSummary(id: record.id, deviceName: device, timestamp: record.timestamp, duration: record.duration, status: record.processingStatus)
@@ -283,6 +292,42 @@ final class AppState: ObservableObject {
     func setRemoteBackend(_ backend: RemoteBackendKind) { remoteScribe.setDefaultBackend(backend) }
     func copyRemotePairingCode() { if PlatformServices.copy(remoteScribe.pairingCode) { notice = "Code d’appairage copié." } }
     func regenerateRemotePairingCode() { remoteScribe.regeneratePairingCode() }
+    func setLocalAPIEnabled(_ enabled: Bool) {
+        settings.localApiEnabled = enabled; saveSettings()
+        enabled ? startLocalAPI() : stopLocalAPI()
+    }
+
+    /// The preview never touches the Keychain token nor the fixed port: it binds
+    /// an ephemeral loopback port with a throwaway token.
+    private func startLocalAPI() {
+        guard localAPI == nil else { return }
+        do {
+            let token = preview ? try LocalAPIServer.generateToken() : try LocalAPIServer.keychainToken()
+            let server = LocalAPIServer(history: historyRepository, token: token, port: preview ? 0 : LocalAPIServer.defaultPort)
+            server.onStateChanged = { [weak self] running, message in self?.localAPIRunning = running; self?.localAPIStatus = message }
+            server.onPatientContextChanged = { [weak self] value in self?.patientContext = value }
+            server.retranscribe = { [weak self] record, reply in
+                guard let self else { reply(.busy); return }
+                guard self.pipelineStatus != .recording, self.pipelineStatus != .processing else { reply(.busy); return }
+                guard FileManager.default.fileExists(atPath: record.audio) else { reply(.notFound); return }
+                self.pipeline.reprocess(record, paste: false); reply(.accepted)
+            }
+            localAPI = server; localAPIToken = token
+            try server.start()
+        } catch {
+            localAPI?.stop(); localAPI = nil; localAPIRunning = false
+            localAPIStatus = error.localizedDescription
+        }
+    }
+
+    private func stopLocalAPI() {
+        localAPI?.stop(); localAPI = nil
+        localAPIRunning = false; localAPIStatus = "Désactivé"; localAPIToken = nil
+    }
+
+    func copyLocalAPIToken() { if let localAPIToken, PlatformServices.copy(localAPIToken) { notice = "Token du harness local copié." } }
+    func clearPatientContext() { historyRepository.patientContext = nil; patientContext = nil }
+
     func show(_ section: Section) { selection = section; NSApp.activate(ignoringOtherApps: true); NSApp.windows.first(where: { !($0 is NSPanel) })?.makeKeyAndOrderFront(nil) }
 
     func createMode() { do { let mode = try modeRepository.create(); reloadModes(); selectedModeID = mode.id } catch { notice = error.localizedDescription } }
@@ -325,6 +370,7 @@ final class AppState: ObservableObject {
         showPermissionSetup = false
     }
     func shutdown() {
+        localAPI?.stop(); localAPI = nil
         remoteScribe.stop(); pipeline.shutdown(); hotkey.unregister(); llmServer.stop()
         downloadProcesses.values.forEach { $0.terminate() }
     }

@@ -1,0 +1,27 @@
+{
+  "name": "@voxlocal/dsh-voxlocal-tools",
+  "private": true,
+  "version": "0.1.0",
+  "description": "dsh plugin: read VoxLocal dictations (list, get, retranscribe) from the loopback API",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "engines": { "node": ">=22.19" },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
+    "@deepseek-ai/schemastery": "~3.18.4"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
+    "@deepseek-ai/schemastery": "3.18.4",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.4"
+  }
+}

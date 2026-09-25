@@ -253,6 +253,32 @@ struct SettingsView: View {
                     }
                 }
             }
+            group("Harness local") {
+                Toggle("Exposer les dictées au harness local", isOn: Binding(get: { state.settings.localApiEnabled == true }, set: state.setLocalAPIEnabled))
+                Text("L’agent de ce poste lit les dictées terminées sur 127.0.0.1 uniquement, avec un token. L’audio n’est jamais exposé.")
+                    .font(.callout).foregroundStyle(.secondary)
+                if state.settings.localApiEnabled == true {
+                    if state.localAPIRunning {
+                        Label(state.localAPIStatus, systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else {
+                        Label(state.localAPIStatus, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                    if let token = state.localAPIToken {
+                        LabeledContent("Token") {
+                            HStack(spacing: 8) {
+                                Text(token).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(1).truncationMode(.middle).frame(maxWidth: 260)
+                                Button { state.copyLocalAPIToken() } label: { Label("Copier", systemImage: "doc.on.doc") }
+                            }
+                        }
+                    }
+                    LabeledContent("Patient en cours") {
+                        HStack(spacing: 8) {
+                            Text(state.patientContext ?? "Aucun").foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                            if state.patientContext != nil { Button("Effacer") { state.clearPatientContext() } }
+                        }
+                    }
+                }
+            }
             group("Informations avancées") {
                 DisclosureGroup("Réseau et diagnostic") {
                     VStack(alignment: .leading, spacing: 10) {
