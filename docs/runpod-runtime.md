@@ -1,34 +1,53 @@
 # RunPod runtime runbook
 
-This runbook prepares the existing Pod bootstrap without provisioning a Pod or
-spending GPU credits. It is intentionally provider neutral: the image owner
-chooses and benchmarks the voice model, the optional small cleanup model, and
-the later Qwen-like LLM. No endpoint URL, token, region, retention or ZDR/DPA
-claim is encoded in this repository.
+This runbook covers the VoxLocal RunPod image and its supervisor. The
+deployment guide for hospital IT and operators is
+[`cloud-deployment.md`](cloud-deployment.md). No endpoint URL, token, region,
+retention or ZDR/DPA claim is encoded in this repository, and no Pod has been
+provisioned yet.
 
 ## What is delivered
 
-Copy `cloud/runpod/start-all.sh` into `/workspace/voxlocal/` and run it from
-the Pod. It supervises three operator-supplied commands:
+`cloud/runpod/Dockerfile` builds `whisper-server` and `llama-server` with CUDA
+at the same commits as the Mac submodules (whisper.cpp `v1.9.3`
+= `371b5a7`, llama.cpp `a298422`; `tests/test_runpod_runtime.py` fails if they
+drift), plus Caddy as the TLS edge. `cloud/runpod/entrypoint.sh` prepares the
+token, the certificate, the models and the Caddyfile at boot, then execs
+`start-all.sh`, which supervises four commands:
 
-* `VOXLOCAL_VOICE_CMD` (required, typically Whisper `large-v3`)
-* `VOXLOCAL_CLEAN_CMD` (optional, a separate small text correction service)
-* `VOXLOCAL_LLM_CMD` (optional, enabled only after a separate benchmark)
+* `VOXLOCAL_VOICE_CMD` (required): `whisper-server` on `127.0.0.1:8001`
+* `VOXLOCAL_CLEAN_CMD` (optional, not used by the image)
+* `VOXLOCAL_LLM_CMD` (optional, `VOXLOCAL_LLM=off` disables it): `llama-server`
+  on `127.0.0.1:8003`, `--api-key-file` on the same token
+* `VOXLOCAL_EDGE_CMD` (optional): Caddy on `:8443`, TLS 1.3, Bearer token
+  required, routes `/voice/*`, `/llm/*` and the unprefixed OpenAI routes. In
+  the image it first runs `wait-ready.sh`, which polls the `/health` of
+  `whisper-server` and `llama-server` for up to 60 s (`VOXLOCAL_READY_TIMEOUT`)
+  so the first request does not meet a 502. With `VOXLOCAL_LLM=off`, `/llm/*`
+  and `/v1/chat/completions` answer a JSON `404`
 
-Each command must bind to `127.0.0.1` and serve an OpenAI-compatible
-`/v1/models` route. Only the reviewed Pod HTTPS edge should be exposed. The
-script reads `/workspace/voxlocal/api-token` inside the Pod, requires no
-group/world permissions, and never prints its contents. `cloud/runpod/
-runtime.env.example` is a placeholder configuration; replace angle-bracket
-values only in a Pod-local file.
+If any child exits, the supervisor stops the others and exits with status 2, so
+the Pod stops rather than serving half a runtime. `VOXLOCAL_TLS_CERT` and
+`VOXLOCAL_TLS_KEY` are validated (both or neither; key not group/world
+accessible) and passed through to every child. The token file must not be
+group/world readable and is never printed. `cloud/runpod/runtime.env.example`
+remains a placeholder for images that bring their own servers.
 
-From a second Pod shell, readiness can be checked with synthetic metadata only:
+`cloud/runpod/deploy.sh` performs the RunPod control-plane steps with
+`runpodctl` (build and push, template, Pod, fingerprint check); see the
+deployment guide.
+
+From a Pod shell, readiness can be checked with synthetic metadata only:
 
 ```bash
-python cloud/runpod/check-services.py \
+python3 /workspace/voxlocal/check-services.py \
   --service voice http://127.0.0.1:8001 \
-  --service clean http://127.0.0.1:8002
+  --service llm http://127.0.0.1:8003
 ```
+
+`whisper-server` has no `/v1/models` route, so this probe reports the voice
+service as not ready on its loopback port; through the edge
+(`https://127.0.0.1:8443/voice`) it succeeds, because Caddy answers that route.
 
 The checker sends a bearer token read from a service-specific environment/file
 (`VOXLOCAL_VOICE_API_TOKEN` or `VOXLOCAL_VOICE_TOKEN_FILE`, and the equivalent
@@ -49,7 +68,8 @@ export VOXLOCAL_VOICE_URL=https://voice.example.invalid
 export VOXLOCAL_CLEAN_URL=https://clean.example.invalid
 export VOXLOCAL_LLM_URL=https://llm.example.invalid
 export VOXLOCAL_TOKEN_FILE=/workspace/voxlocal/api-token
-python cloud/runpod/benchmark.py --timeout 5 > benchmark.json
+python3 cloud/runpod/benchmark.py --iterations 5 --timeout 30 > benchmark.json
+python3 cloud/runpod/bench-report.py benchmark.json
 ```
 
 `--voice-url`, `--clean-url`, `--llm-url`, or repeated `--service NAME URL`
@@ -60,10 +80,18 @@ Tokens are accepted only through environment variables or private files; they
 are never command-line arguments or output. Token files must not be readable by
 group or other users.
 
-The voice check calls `/v1/models` and `/v1/audio/transcriptions`. Cleanup and
-LLM checks call `/v1/models` and `/v1/chat/completions`. Every request carries
-only a deterministic 250 ms silent PCM WAV or the fixed synthetic text fixture;
-no input file, prompt, response body, audio, or token is printed. Response
+`--iterations N` (1 to 100) repeats every operation; the JSON reports each
+sample and, per operation, min/mean/p50/p95/max latency (nearest-rank over
+successful samples) and, for chat, `tokens_per_second` =
+`usage.completion_tokens` / request latency. `--ca-file` trusts a private or
+self-signed edge certificate; `--note` stores a one-line operator note (hardware,
+model files). The schema is documented in the `benchmark.py` docstring.
+
+The voice check calls `/v1/models` once and `/v1/audio/transcriptions` with a
+deterministic 250 ms silent WAV and a deterministic 10 s tone WAV. Cleanup and
+LLM checks call `/v1/models` and `/v1/chat/completions` with a fixed synthetic
+French clinical sentence. No input file, prompt, response text, audio, or token
+is printed or stored; only status, latency and token counts. Response
 reads are capped at 64 KiB and each request has a bounded timeout (at most 30
 seconds). The benchmark rejects credentials, query strings, and fragments in
 URLs, and permits plain HTTP only for loopback hosts; all remote endpoints

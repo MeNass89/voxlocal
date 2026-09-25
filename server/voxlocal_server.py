@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import collections
 import contextlib
 import hashlib
@@ -99,6 +100,31 @@ async def read_frame(reader: asyncio.StreamReader) -> tuple[str, uuid.UUID, int,
     except (ValueError, UnicodeDecodeError) as exc:
         raise ProtocolError("protocolViolation", "UUID invalide.") from exc
     return kind, session_id, struct.unpack(">Q", body[37:45])[0], body[45:]
+
+
+_PEM_CERTIFICATE = re.compile(r"-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----", re.DOTALL)
+
+
+def certificate_fingerprint(cert_path: Path) -> bytes:
+    """SHA-256 of the DER encoding of the first (leaf) certificate in a PEM file.
+
+    This is the value the iPhone pins and the Mac app publishes; it equals
+    `openssl x509 -outform der | sha256`.
+    """
+    match = _PEM_CERTIFICATE.search(Path(cert_path).read_text(encoding="ascii", errors="replace"))
+    if not match:
+        raise ValueError("Certificat TLS PEM introuvable.")
+    return hashlib.sha256(ssl.PEM_cert_to_DER_cert(match.group(0))).digest()
+
+
+def bonjour_txt_properties(config: "ServerConfig", fingerprint_b64: Optional[str]) -> dict[bytes, bytes]:
+    """Bonjour TXT record, aligned with the Swift Core: `tls`=1 and `fp`=<base64 SHA-256> when TLS is on."""
+    tls = bool(config.tls_cert)
+    properties = {b"version": b"1", b"backend": b"voxlocal", b"backends": b"voxlocal",
+                  b"tls": b"1" if tls else b"0", b"test": b"1" if config.mock else b"0"}
+    if tls and fingerprint_b64:
+        properties[b"fp"] = fingerprint_b64.encode("ascii")
+    return properties
 
 
 def pcm_to_wav(pcm: bytes) -> bytes:
@@ -267,8 +293,9 @@ class RemoteScribeConnection:
     def __init__(self, server: "RemoteScribeServer", reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         self.server, self.reader, self.writer = server, reader, writer
         self.paired = False
-        self.sequence = 0
-        self.expected_client_sequence = 0
+        # Shipped Core contract: only audio chunks carry a meaningful sequence
+        # (per session, from 0). PAIR must still be the first frame.
+        self.frames_seen = 0
         self.session: Optional[Session] = None
         self.peer = str((writer.get_extra_info("peername") or ("unknown",))[0])
 
@@ -280,10 +307,8 @@ class RemoteScribeConnection:
                     remaining = self.server.config.max_session_seconds - (time.monotonic() - self.session.started_at)
                     timeout = min(self.server.config.chunk_timeout, remaining)
                 kind, session_id, sequence, payload = await asyncio.wait_for(read_frame(self.reader), max(0.001, timeout))
-                if sequence != self.expected_client_sequence:
-                    raise ProtocolError("protocolViolation", "Séquence non contiguë ou rejouée.")
-                self.expected_client_sequence += 1
-                await self.handle(kind, session_id, payload)
+                self.frames_seen += 1
+                await self.handle(kind, session_id, sequence, payload)
         except asyncio.IncompleteReadError:
             pass
         except TimeoutError:
@@ -302,11 +327,11 @@ class RemoteScribeConnection:
             with contextlib.suppress(OSError, TimeoutError):
                 await asyncio.wait_for(self.writer.wait_closed(), 2)
 
-    async def handle(self, kind: str, session_id: uuid.UUID, payload: bytes) -> None:
+    async def handle(self, kind: str, session_id: uuid.UUID, sequence: int, payload: bytes) -> None:
         if kind != "audioChunk" and len(payload) > MAX_JSON_PAYLOAD:
             raise ProtocolError("protocolViolation", "Payload JSON trop volumineux.")
         if kind == "pair":
-            if self.paired or session_id != NO_SESSION or self.expected_client_sequence != 1:
+            if self.paired or session_id != NO_SESSION or self.frames_seen != 1:
                 raise ProtocolError("protocolViolation", "PAIR doit être le premier message, sans session.")
             await self.handle_pair(payload)
             return
@@ -315,7 +340,7 @@ class RemoteScribeConnection:
         if kind == "startSession":
             await self.handle_start(session_id, payload)
         elif kind == "audioChunk":
-            await self.handle_audio(session_id, payload)
+            await self.handle_audio(session_id, sequence, payload)
         elif kind == "stopSession":
             await self.handle_stop(session_id, payload)
         elif kind == "ping":
@@ -378,8 +403,10 @@ class RemoteScribeConnection:
             raise ProtocolError("sessionLimit", "Durée maximale dépassée.")
         return self.session
 
-    async def handle_audio(self, session_id: uuid.UUID, payload: bytes) -> None:
+    async def handle_audio(self, session_id: uuid.UUID, sequence: int, payload: bytes) -> None:
         session = self.active_session(session_id)
+        if sequence != session.frames_received:
+            raise ProtocolError("protocolViolation", "Séquence audio non contiguë ou rejouée.")
         if not payload or len(payload) % 2:
             raise ProtocolError("unsupportedAudioFormat", "Chunk PCM invalide.")
         if session.bytes_received + len(payload) > self.server.config.max_audio_bytes:
@@ -391,8 +418,9 @@ class RemoteScribeConnection:
     async def handle_stop(self, session_id: uuid.UUID, payload: bytes) -> None:
         session = self.active_session(session_id)
         frames = _json_loads(payload).get("framesSent")
-        if type(frames) is not int or frames != session.frames_received or frames < 0:
-            raise ProtocolError("protocolViolation", "Nombre de chunks incohérent.")
+        # framesSent counts PCM sample frames (mono 16-bit), not chunks.
+        if type(frames) is not int or frames != session.bytes_received // 2:
+            raise ProtocolError("protocolViolation", "framesSent incohérent avec les échantillons reçus.")
         if not session.bytes_received:
             raise ProtocolError("emptyAudio", "La dictée ne contient aucun audio.")
         # No waiting queue of clinical payloads: excess work is refused promptly.
@@ -434,8 +462,8 @@ class RemoteScribeConnection:
             await self.send_json("error", NO_SESSION, {"code": code, "message": message})
 
     async def send_json(self, kind: str, session_id: uuid.UUID, value: dict[str, Any]) -> None:
-        self.writer.write(encode_frame(kind, session_id, self.sequence, _json_bytes(value)))
-        self.sequence += 1
+        # Server frames always carry sequence 0, like the shipped Swift server.
+        self.writer.write(encode_frame(kind, session_id, 0, _json_bytes(value)))
         await asyncio.wait_for(self.writer.drain(), 5)
 
 
@@ -484,6 +512,7 @@ class RemoteScribeServer:
         self.inferences = 0
         self._zeroconf = None
         self._service_info = None
+        self.tls_fingerprint_b64: Optional[str] = None
 
     def record_pair_failure(self, peer: str) -> None:
         self.pair_failures.setdefault(peer, collections.deque(maxlen=5)).append(time.monotonic())
@@ -501,6 +530,7 @@ class RemoteScribeServer:
             ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             ssl_context.minimum_version = ssl.TLSVersion.TLSv1_3
             ssl_context.load_cert_chain(self.config.tls_cert, self.config.tls_key)
+            self.tls_fingerprint_b64 = base64.b64encode(certificate_fingerprint(self.config.tls_cert)).decode("ascii")
             if self.config.tls_client_ca:
                 ssl_context.load_verify_locations(cafile=self.config.tls_client_ca)
                 ssl_context.verify_mode = ssl.CERT_REQUIRED
@@ -508,7 +538,13 @@ class RemoteScribeServer:
         self._server = await asyncio.start_server(self._accept, self.config.host, self.config.port, ssl=ssl_context,
                                                   limit=64 * 1024, backlog=16, **kwargs)
         await self._publish_service()
-        logger.info("server_ready tls=%s mock=%s persistence=false", bool(ssl_context), self.config.mock)
+        if self.tls_fingerprint_b64:
+            # The fingerprint is public (it identifies the certificate, not the key);
+            # operators compare it with the one shown on the iPhone at first connection.
+            logger.info("server_ready tls=True mock=%s persistence=false tls_fingerprint_sha256=%s",
+                        self.config.mock, self.tls_fingerprint_b64)
+        else:
+            logger.info("server_ready tls=False mock=%s persistence=false", self.config.mock)
 
     async def _publish_service(self) -> None:
         # Only advertise an explicit clinical interface, never all interfaces.
@@ -520,8 +556,7 @@ class RemoteScribeServer:
             from zeroconf.asyncio import AsyncZeroconf
             self._service_info = ServiceInfo(SERVICE_TYPE, f"{self.config.server_name}.{SERVICE_TYPE}",
                 addresses=[address.packed], port=self._server.sockets[0].getsockname()[1],
-                properties={"version": "1", "backend": "voxlocal", "backends": "voxlocal",
-                            "tls": "1" if self.config.tls_cert else "0", "test": "1" if self.config.mock else "0"},
+                properties=bonjour_txt_properties(self.config, self.tls_fingerprint_b64),
                 server=f"voxlocal-{hashlib.sha256(address.packed).hexdigest()[:8]}.local.")
             self._zeroconf = AsyncZeroconf(interfaces=[str(address)])
             await self._zeroconf.async_register_service(self._service_info)

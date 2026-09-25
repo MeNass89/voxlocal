@@ -36,14 +36,14 @@ réglages locaux de l’application pour éviter une nouvelle demande du Trousse
 ## Lancer
 
 ```bash
-cd /Users/nawfel/Projects/VoxLocal
+cd mac/VoxLocal
 ./run.sh
 ```
 
-Ou directement :
+Ou directement, depuis `mac/VoxLocal` :
 
 ```bash
-open "/Users/nawfel/Projects/VoxLocal/dist/VoxLocal.app"
+open dist/VoxLocal.app
 ```
 
 L’application reste utilisable sans modèles pour parcourir l’UI, gérer les modes et enregistrer. Après l’arrêt d’une dictée, le WAV est conservé dans l’historique et une erreur explique qu’aucun modèle Whisper n’est installé.
@@ -63,10 +63,10 @@ Les dossiers sont créés automatiquement au premier lancement.
 
 ```text
 WHISPER MODEL → placer ici :
-/Users/nawfel/Library/Application Support/VoxLocal/models/whisper/
+~/Library/Application Support/VoxLocal/models/whisper/
 
 LLM MODEL → placer ici :
-/Users/nawfel/Library/Application Support/VoxLocal/models/llm/
+~/Library/Application Support/VoxLocal/models/llm/
 ```
 
 Whisper attend un fichier **whisper.cpp GGML `.bin`** avec un en-tête GGML valide, placé directement dans le dossier ou dans un sous-dossier. Exemple compatible : `ggml-small.bin` du dépôt Hugging Face `ggerganov/whisper.cpp`.
@@ -99,4 +99,4 @@ Les tests couvrent modes, réglages, historique, récupération, détection GGML
 - `Website/` : première vitrine Web immersive de l’écosystème VoxLocal,
   RemoteScribe et de l’offre destinée aux hôpitaux.
 
-Le plugin portable SWFB reste séparé dans `/Users/nawfel/Projects/SuperwhisperFloatingButton`.
+Le plugin portable SWFB reste un projet séparé, hors de ce dépôt.

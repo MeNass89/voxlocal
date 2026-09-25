@@ -1,0 +1,96 @@
+# VoxLocal "scribe" profile patch layer, applied after dsh-base and dsh-web-app.
+# Pinned to @deepseek-ai/dsh 0.1.7-rc.2: a user patch REPLACES the whole config
+# of the row it targets (no deep merge), so each override restates every field.
+#
+# Secrets never live here: the edge token is read from VOXLOCAL_LLM_TOKEN at
+# request time (apiKeyEnv), the endpoint from VOXLOCAL_LLM_URL at boot (!!js).
+
+- id: llm-pi-ai
+  config:
+    providers:
+      voxlocal-gpu:
+        name: VoxLocal GPU
+        apiKeyEnv: VOXLOCAL_LLM_TOKEN
+        api: openai-completions
+        baseURL: !!js process.env.VOXLOCAL_LLM_URL
+        # llama-server speaks max_tokens and rejects the developer role.
+        compat:
+          supportsDeveloperRole: false
+          maxTokensField: max_tokens
+        models:
+          - id: qwen3.8-27b
+            name: Qwen3.8 27B
+            input: [text, image]
+
+- id: agent-default-model
+  config:
+    provider: voxlocal-gpu
+    model: qwen3.8-27b
+
+# ---------------------------------------------------------------- scribe (H4)
+# The four VoxLocal plugins are pnpm `link:` dependencies of this profile
+# (package.json), so the rows name packages, not paths: a relative path would
+# resolve beside the $DSH_HOME/profiles/scribe symlink, not beside this file.
+# They import dsh packages as peers, which resolve from the dsh installation.
+
+# No coding persona: the scribe persona plugin contributes the role and rules.
+- id: system-prompt
+  config:
+    personaPrefix: ''
+    personaSuffix: ''
+
+# Approval gate policy: `ask` routes record_apply / record_restore to the
+# clinician in the chat. `never` (a headless run) rejects every write.
+- id: approval
+  config:
+    policy: ask
+
+# Sessions use the `scribe` preset: no shell, no file tools, no subagents.
+# The shipped coding presets stay out of this profile.
+- id: agent-preset-registry
+  config:
+    default: scribe
+- id: preset-standard
+  disabled: true
+- id: preset-ptc
+  disabled: true
+- id: preset-minimal
+  disabled: true
+- id: preset-cordis
+  disabled: true
+
+- insert:
+    - id: preset-scribe
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: scribe
+        name: Scribe clinique
+        description: Prépare les modifications du dossier à partir de la dictée ; écrit seulement après feu vert.
+        order: 1
+        plugins: []
+
+    # dictation_list / dictation_get / dictation_retranscribe (H2)
+    - id: voxlocal-tools
+      name: '@voxlocal/dsh-voxlocal-tools'
+
+    # patient_* and record_* tools; tool-side bridge token only (H3)
+    - id: portail-tools
+      name: '@voxlocal/portail-tools'
+      config:
+        bridgeUrl: !!js process.env.PORTAIL_BRIDGE_URL ?? 'http://127.0.0.1:47368/'
+        tokenEnv: PORTAIL_BRIDGE_TOKEN
+
+    # ask before record_apply / record_restore, relay the human decision to the
+    # bridge with the approver token, audit to harness/audit/approvals.jsonl
+    - id: scribe-approval
+      name: '@voxlocal/scribe-approval'
+      config:
+        bridgeUrl: !!js process.env.PORTAIL_BRIDGE_URL ?? 'http://127.0.0.1:47368/'
+        tokenEnv: PORTAIL_BRIDGE_TOKEN
+        approverTokenEnv: PORTAIL_BRIDGE_APPROVER_TOKEN
+        answerer: !!js "process.env.SCRIBE_CLINICIAN ? 'poste:' + process.env.SCRIBE_CLINICIAN : undefined"
+        auditPath: !!js process.env.SCRIBE_APPROVALS_AUDIT
+
+    # French clinical persona: role, loop, hard rules, SOAP mapping, approval, toolbox gaps
+    - id: scribe-persona
+      name: '@voxlocal/scribe-persona'

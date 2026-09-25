@@ -1,6 +1,6 @@
 # Mac runtime quality record
 
-This note records the Mac-source audit for the September 2026 VoxLocal productization pass. The reviewed implementation is the Swift package in `desktop-source/VoxLocal-Source-Complet/VoxLocal`; this is source traceability, not a claim that a new DMG was generated.
+This note records the Mac-source audit for the September 2026 VoxLocal productization pass. The reviewed implementation is the Swift package in `mac/VoxLocal`; this is source traceability, not a claim that a new DMG was generated.
 
 ## Changes shipped in source
 
@@ -11,7 +11,7 @@ This note records the Mac-source audit for the September 2026 VoxLocal productiz
 
 ## Evidence
 
-`swift build` from `desktop-source/VoxLocal-Source-Complet/VoxLocal` passes on the current machine. The package has no test target (`swift test` reports “no tests found”), so validation here is compile-level and code-path review. No secrets or token values were printed.
+`swift build` from `mac/VoxLocal` passes on the current machine. The package has no test target (`swift test` reports “no tests found”), so validation here is compile-level and code-path review. No secrets or token values were printed.
 
 ## Remaining risks
 

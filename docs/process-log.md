@@ -24,7 +24,7 @@ Les deux dernières tâches sont explicitement séparées selon le coût cogniti
 
 ### 4. Choix d'implémentation
 
-Le dossier [`source`](../source) est la base Xcode canonique ; `RemoteScribePortable/` est un miroir compatible avec le chemin de l’archive. Les trois fichiers Core manquants y ont été recréés avec les API appelées par le client. `server/voxlocal_server.py` est l’hôte de référence Windows/macOS : TLS obligatoire avec un GPU, mode mock local explicitement marqué, annonce DNS-SD facultative et quotas. `windows/` garde le codec et un hôte legacy pour tests synthétiques.
+Le dossier [`ios`](../ios) (alors `source/`) est la base Xcode canonique ; le miroir `RemoteScribePortable/` de l’archive n’est plus versionné. Les trois fichiers Core manquants y ont été recréés avec les API appelées par le client. `server/voxlocal_server.py` est l’hôte de référence Windows/macOS : TLS obligatoire avec un GPU, mode mock local explicitement marqué, annonce DNS-SD facultative et quotas. `windows/` garde le codec et un hôte legacy pour tests synthétiques.
 
 La persistance applicative serveur est absente par défaut : buffer audio en mémoire, suppression à la fin, aucun texte dans les logs. Le GPU reste soumis à un DPA/ZDR vérifié séparément. L'historique iOS est mémoire seule par défaut ; sa conservation est opt-in dans le Keychain `ThisDeviceOnly`, avec suppression confirmée ou tombstone.
 
@@ -38,8 +38,8 @@ Les changements sont acceptés uniquement après une vérification reproductible
 python3 -m unittest discover -s windows -p 'test_*.py' -v
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 python3 -m py_compile server/voxlocal_server.py windows/*.py
-swiftc -parse source/Core/Sources/*.swift source/PortableClient/RemoteScribePortable/*.swift
-swiftc -typecheck source/Core/Sources/*.swift source/PortableClient/RemoteScribePortable/SecurePairingStore.swift
+swiftc -parse ios/Core/Sources/*.swift ios/RemoteScribePortable/*.swift
+swiftc -typecheck ios/Core/Sources/*.swift ios/RemoteScribePortable/SecurePairingStore.swift
 ```
 
 Le build Xcode final doit encore être exécuté sur une machine équipée du SDK iOS et d'une Team Apple ; l'environnement de travail ne fournit que les Command Line Tools.
@@ -138,9 +138,8 @@ restent x86_64 et nécessitent Rosetta sur Apple Silicon. La première signature
 depuis iCloud Drive a été refusée parce que Finder réinjectait des attributs
 `com.apple.FinderInfo`/`com.apple.provenance` pendant la copie. Le correctif est
 de construire le bundle de travail dans `/tmp` avant signature, puis de créer
-l’image depuis un staging local. Le DMG final est
-`VoxLocal-Agent-2026-09-24.dmg`, SHA-256
-`a01bbb55e6679cecda8ff2c36fbf6f95ed5d5b94e4cb4af2d9e0720d5469a89d`.
+l’image depuis un staging local. Un DMG de démonstration a été produit (les
+artefacts ne sont pas versionnés et leurs empreintes ne sont pas reprises ici).
 `codesign --verify --deep --strict` passe sur le bundle ; le lanceur agent a
 été exécuté avec Python 3.14 et l’image montée en lecture seule confirme la
 présence des sources, docs et shim sans token.
@@ -161,11 +160,10 @@ services voix, nettoyage et LLM séparément, avec token Pod-local aux permissio
 strictes, logs privés et arrêt des enfants. `check-services.py` vérifie
 uniquement `/v1/models` avec un token lu dans le Pod ; aucun modèle, endpoint ou
 engagement ZDR fournisseur n’est inventé. Les tests synthétiques du serveur et
-du runtime passent (12 cas), et le runbook est dans `docs/runpod-runtime.md`.
+du runtime passent, et le runbook est dans `docs/runpod-runtime.md`.
 
 Le DMG a été régénéré par `./scripts/build-macos.sh`, signé ad hoc, vérifié avec
-`codesign --verify --deep --strict`, monté en lecture seule et inspecté. Son
-SHA-256 actuel est `d9400e33b7fc6acccfced009f898f2b4e79700da2e15259d1c3ef90dedfcf2c4`.
+`codesign --verify --deep --strict`, monté en lecture seule et inspecté.
 La matrice de sortie, avec les portes encore externes (Personal Team, compte
 RunPod, mTLS/pinning, DPA/ZDR, installateur Windows et validation DPO), est dans
 `docs/release-readiness.md`.
@@ -179,7 +177,7 @@ processus et ajouté `clean --stdin` / `chat --stdin` pour que les harness ne
 mettent pas de texte sensible dans la liste des processus. Les erreurs HTTP
 amont distinguent désormais authentification, route absente et panne
 relançable ; le `requestId` est propagé au fournisseur sans PHI. La suite agent
-compte maintenant 8 tests, tous verts.
+passe entièrement (elle compte 9 cas au 25 septembre).
 
 Le dernier passage Mac borne aussi les réponses GPU à 4 MiB, ajoute
 `Cache-Control: no-store` et `X-Remote-Scribe-ZDR: required`, et ne remonte plus
@@ -206,16 +204,13 @@ Mac faute de `pwsh` ; un contrôle statique et la compilation Python ciblée ont
 passé. Le déploiement et ses limites sont dans
 [`windows-deployment.md`](windows-deployment.md).
 
-Deux livrables vérifiables ont été figés après cette passe :
-`VoxLocal-Product-Source-2026-09-25.zip` (source complet sans caches, SHA-256
-`9b70a4a162dccd19bbac23b053a86ed8005be7e1a3b610e7add8b48f8c3c15af`) et
-`VoxLocal-Windows-Runtime-2026-09-25.zip` (paquet Windows, SHA-256
-`22792f90624e04d0eca5b7ff38adbe236c167c19d4157a69016a455093dbb123`). Les deux
-archives ont passé `unzip -t` et n’embarquent ni token ni cache de compilation.
-Les empreintes sont recopiées dans
-[`RELEASE-CHECKSUMS-2026-09-25.txt`](../RELEASE-CHECKSUMS-2026-09-25.txt), qui
-reste volontairement hors des archives afin d’éviter une somme de contrôle
-auto-référente.
+Deux archives ont été figées après cette passe, le source complet sans caches
+et le paquet Windows ; elles ont passé `unzip -t` et n’embarquaient ni token ni
+cache de compilation. Le 25 septembre au soir, la reprise a constaté que
+l’empreinte publiée du DMG ne correspondait plus au fichier et que l’archive
+source précédait les derniers correctifs. Depuis l’import dans git, ces
+artefacts ne sont plus des livrables : ils se reconstruisent depuis le dépôt, et
+leurs empreintes ne sont plus recopiées dans la documentation.
 
 ### 25 septembre 2026 — revue adversariale produit ciblée
 
@@ -245,3 +240,65 @@ et les fichiers de plus de 64 MiB ne sont pas lus en mémoire.
 Enfin, `check-services.py` peut utiliser un token distinct par capacité
 (`VOICE`, `CLEAN`, `LLM`) avant de retomber sur le fichier commun historique,
 afin d'éviter de distribuer le même secret à tous les serveurs du Pod.
+
+### 25 septembre 2026 — dépôt public, contrat de séquence, TLS/pinning, CI
+
+**Dépôt.** Le dossier iCloud a été importé dans un dépôt git public
+(`MeNass89/voxlocal`) avec une arborescence stable : `ios/`, `RemoteScribe/`,
+`mac/VoxLocal/` (whisper.cpp et llama.cpp en sous-modules épinglés), `server/`,
+`agent/`, `windows/`, `cloud/runpod/`, `tests/`, `scripts/`, `docs/`,
+`website/`. Les artefacts (DMG, archives, fichiers d’empreintes) sont sortis de
+la documentation : ils se reconstruisent depuis le dépôt.
+
+**Ce qui a été trouvé.** Deux sondes contre le binaire réel `RemoteScribeHost`
+ont montré que l’iPhone ne pouvait pas dicter vers VoxLocal.app :
+
+1. le client iOS numérotait toutes les trames avec un compteur par connexion et
+   comptait `framesSent` en chunks, alors que le Core livré numérote seulement
+   les chunks audio, à partir de 0 à chaque session, et compte `framesSent` en
+   échantillons PCM. Numérotation par connexion : `RemoteScribeError` au premier
+   chunk ; numérotation par session : `completed` ;
+2. VoxLocal.app écoutait en TCP clair sans code d’appairage, alors que le client
+   iOS refusait déjà le clair hors localhost.
+
+**Ce qui a changé.**
+
+- Contrat de séquence aligné sur le Core livré, dans le client iOS et les deux
+  hôtes Python ; test d’interopérabilité contre le vrai `RemoteScribeHost`
+  (`tests/test_real_host_interop.py`).
+- Identité TLS 1.3 sur le Mac (RSA 2048 auto-signé créé au premier lancement,
+  importé en mémoire seulement), code d’appairage obligatoire gardé dans le
+  trousseau, verrou de 60 s après 5 échecs depuis une même adresse
+  (`PairingGate.swift`).
+- Épinglage du certificat dans l’app iOS : SHA-256 du certificat DER, feuille de
+  confirmation à la première connexion, refus avant tout octet applicatif si
+  l’empreinte change.
+- Empreinte publiée par les hôtes Python (journal et Bonjour `fp`) ; scripts
+  d’identité `scripts/make-tls-identity.sh` et `windows/new-tls-identity.ps1`.
+- CI GitHub Actions sur ubuntu, Windows (installateur réellement exécuté) et
+  macOS.
+- Vague produit : serveur LLM gardé chaud, runtimes arm64, téléchargement des
+  modèles et écran d’appairage QR sur Mac (2.3.0) ; onboarding, appairage QR,
+  retour de résultat et iPad sur iOS (1.3) ; image RunPod, porte HTTPS et banc
+  de mesure (voir [`docs/cloud-deployment.md`](cloud-deployment.md)) ; site produit.
+- Revue CodeRabbit 1 (8 majeurs, 10 mineurs corrigés) : plancher macOS 15
+  (`kSecImportToMemoryOnly` n’existe qu’à partir de macOS 15 ; avant, l’import
+  PKCS#12 peut atterrir dans le trousseau `login`), refus d’un QR code qui
+  contredit une empreinte déjà épinglée, `llama-server` vérifié par `lsof` avant
+  de recevoir sa clé, code d’appairage jamais en argument pour l’hôte CLI Swift
+  hors `--insecure-plaintext`, ACL de la clé privée resserrée sous Windows.
+
+**Ce qui a été vérifié**, depuis la racine du dépôt :
+
+```bash
+python3 -m unittest discover -s windows -p 'test_*.py' -v   # 5 OK
+python3 -m unittest discover -s tests -p 'test_*.py' -v     # 24 OK
+python3 -m unittest discover -s agent -p 'test_*.py' -v     # 9 OK
+(cd RemoteScribe && swift test)                             # 8 OK
+(cd mac/VoxLocal && swift build -c release --product VoxLocal)
+xcodebuild -project ios/RemoteScribePortable.xcodeproj -scheme RemoteScribePortable -configuration Debug -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 18 Pro' -derivedDataPath /tmp/voxlocal-ios-docs CODE_SIGNING_ALLOWED=NO test   # 8 XCTest
+```
+
+CI : run 36130936691 sur le commit `766015b`, quatre jobs verts. La
+documentation produit (README, livre blanc sécurité, pitch, FAQ IT, feuille de
+route, script de démo) a été réécrite sur ces faits.

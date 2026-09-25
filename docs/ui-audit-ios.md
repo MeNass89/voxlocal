@@ -29,5 +29,5 @@ La surface SwiftUI mélangeait un dégradé sombre, une carte en `ultraThinMater
 
 ## Vérification
 
-- `swiftc -parse source/PortableClient/RemoteScribePortable/*.swift` passe.
+- `swiftc -parse ios/RemoteScribePortable/*.swift` passe.
 - Le build Xcode complet reste à exécuter sur macOS avec le dossier `Core` restauré ou rétro-ingéniéré. L’environnement de travail actuel ne possède que les Command Line Tools, donc `xcodebuild` ne peut pas lancer le SDK iOS.

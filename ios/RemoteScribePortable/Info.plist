@@ -1,14 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
+    <key>CFBundleDevelopmentRegion</key><string>fr</string>
+    <key>CFBundleLocalizations</key><array><string>fr</string></array>
     <key>CFBundleDisplayName</key><string>Remote Scribe</string>
     <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.1</string>
-    <key>CFBundleVersion</key><string>2</string>
+    <key>CFBundleShortVersionString</key><string>1.3</string>
+    <key>CFBundleVersion</key><string>4</string>
     <key>LSRequiresIPhoneOS</key><true/>
+    <key>NSCameraUsageDescription</key><string>Remote Scribe utilise la caméra uniquement pour lire le code d’appairage affiché sur le poste.</string>
     <key>NSMicrophoneUsageDescription</key><string>Remote Scribe utilise le microphone pour envoyer votre dictée au serveur choisi.</string>
     <key>NSLocalNetworkUsageDescription</key><string>Remote Scribe détecte et contacte le serveur VoxLocal ou Superwhisper sur votre Wi-Fi local.</string>
     <key>NSBonjourServices</key><array><string>_remotescribe._tcp</string></array>

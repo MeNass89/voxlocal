@@ -40,6 +40,18 @@ Endpoints disponibles sur `http://127.0.0.1:47366` :
 - `POST /v1/transcribe` — `audio/wav` PCM mono 16 kHz 16 bits ; ou `application/octet-stream` avec `X-VoxLocal-Audio-Format: pcm_s16le_16k_mono`; ou JSON `{audioBase64, format: "wav"|"pcm_s16le_16k_mono", language?}`.
 - `POST /v1/clean` — JSON `{text}`. Sans LLM, le fallback ne fait qu'un nettoyage d'espaces, pour ne jamais modifier silencieusement une négation, une dose ou un médicament.
 - `POST /v1/chat` — JSON `{messages}`. Désactivé par défaut ; activer explicitement avec `--enable-chat` et configurer `VOXLOCAL_LLM_URL`/`VOXLOCAL_LLM_TOKEN`.
+- `GET /v1/dictations?since=<id>&wait=<s>` — dictées postérieures à `since` (de la plus ancienne à la plus récente) ; `wait` (≤ 25 s) maintient la requête ouverte tant qu'il n'y a rien de nouveau. `since` inconnu → `404 since_not_found`.
+- `GET /v1/dictations/<id>` — une dictée.
+- `GET|POST /v1/patient-context` — JSON `{patientContext: "…" | null}` : patient déclaré par le clinicien, recopié dans chaque dictée créée ensuite (une ligne, 512 octets maximum).
+- `POST /v1/dictations` — **mode `--mock` uniquement** : injecte une dictée synthétique `{finalTranscription, rawTranscription?, duration?, deviceName?, modeId?, processingStatus?}` pour les tests et la démo. Hors mock : `403 mock_only`.
+
+Une dictée a exactement la forme servie par l'API loopback du Mac (`mac/VoxLocal/Sources/VoxLocal/LocalAPI.swift`, `127.0.0.1:47367`), jamais de chemin audio :
+
+```json
+{"id":"…","timestamp":"2026-09-25T13:24:50Z","deviceName":"…","modeId":"medical","rawTranscription":"…","finalTranscription":"…","processingStatus":"completed","duration":300.0,"patientContext":null}
+```
+
+**Écart Windows, dit franchement.** Le service Windows ne conserve aucune dictée (ZDR) : sans `--mock`, les routes de dictées répondent `503 capability_unavailable`. Un harness sur Windows lit donc l'API du Mac (via un tunnel TLS relu) ou cette API en `--mock` avec des données synthétiques. Une source de production côté Windows se branchera derrière le protocole `DictationSource` sans changer le contrat. Les long-polls ne consomment pas de place dans la limite de concurrence.
 
 Toutes les réponses suivent :
 
@@ -92,6 +104,14 @@ powershell -ExecutionPolicy Bypass -File .\agent\run-windows.ps1
 ```
 
 Les scripts d'agents doivent vérifier `ok` et `error.code`, conserver le `requestId`, et traiter `retryable=true` avec une file bornée et backoff. Ils ne doivent pas réessayer automatiquement une transcription après un résultat `completed`.
+
+## Tests
+
+`python3 -m unittest agent.test_agent_api -v` exécute les 15 tests de l'API et
+du CLI (25 septembre 2026) : Bearer, contrats JSON, JSON strict, limites,
+erreurs amont, timeouts, refus de l'HTTP distant, profil mock hermétique, et
+les routes de dictées (filtre `since`, forme sans audio, long-poll qui rend la
+main dès qu'une dictée arrive, contexte patient, injection réservée au mock).
 
 ## Limites et chemin de production
 

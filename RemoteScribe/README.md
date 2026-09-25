@@ -15,7 +15,7 @@ iPhone / iPad / second Mac
 Quitter VoxLocal ou désactiver son serveur Remote Scribe pour éviter un conflit de port, puis :
 
 ```bash
-cd /Users/nawfel/Projects/RemoteScribe
+cd RemoteScribe
 ./run-superwhisper.sh
 ```
 

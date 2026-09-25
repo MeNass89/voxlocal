@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "VoxLocal",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS("15.0")],
     products: [.executable(name: "VoxLocal", targets: ["VoxLocal"])],
     dependencies: [.package(path: "../../RemoteScribe")],
     targets: [
@@ -20,6 +20,7 @@ let package = Package(
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("Carbon")
             ]
-        )
+        ),
+        .testTarget(name: "VoxLocalTests", dependencies: ["VoxLocal"], path: "Tests/VoxLocalTests")
     ]
 )

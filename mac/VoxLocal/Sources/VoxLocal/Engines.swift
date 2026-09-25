@@ -41,8 +41,10 @@ enum ProcessRunner {
         try? stdout.close(); try? stderr.close()
         let out = (try? Data(contentsOf: stdoutURL)) ?? Data()
         let err = (try? Data(contentsOf: stderrURL)) ?? Data()
-        let output = String(data: out, encoding: .utf8) ?? ""
-        let errors = String(data: err, encoding: .utf8) ?? ""
+        // Lossy decoding: llama-cli cuts a long prompt echo at a byte count, which can
+        // split a multi-byte character; strict decoding would drop the whole output.
+        let output = String(decoding: out, as: UTF8.self)
+        let errors = String(decoding: err, as: UTF8.self)
         guard process.terminationStatus == 0 else {
             let detail = String(errors.trimmingCharacters(in: .whitespacesAndNewlines).suffix(4_000))
             throw VoxError.message("\(executable.lastPathComponent) a échoué\(detail.isEmpty ? "." : " : \(detail)")")
@@ -52,13 +54,21 @@ enum ProcessRunner {
 }
 
 final class WhisperEngine {
-    func transcribe(audio: URL, model: URL, language: String?) throws -> STTResult {
+    /// `-fa` flash attention, `-t` one thread per logical core, `-bs` the beam size
+    /// from Réglages; `-np -oj` keep stdout quiet and write the JSON result file.
+    static func arguments(model: URL, audio: URL, language: String?, beamSize: Int, outputBase: URL) -> [String] {
+        ["-m", model.path, "-f", audio.path, "-l", language ?? "auto", "-fa",
+         "-t", String(ProcessInfo.processInfo.activeProcessorCount), "-bs", String(max(1, beamSize)),
+         "-oj", "-of", outputBase.path, "-np"]
+    }
+
+    func transcribe(audio: URL, model: URL, language: String?, beamSize: Int = 5) throws -> STTResult {
         guard FileManager.default.fileExists(atPath: audio.path) else { throw VoxError.message("Le fichier audio est introuvable.") }
         let runtime = try RuntimeLocator.executable("whisper-cli")
         let outputBase = audio.deletingPathExtension().appendingPathExtension("whisper-result")
         let jsonURL = URL(fileURLWithPath: outputBase.path + ".json")
         try? FileManager.default.removeItem(at: jsonURL)
-        _ = try ProcessRunner.run(runtime, ["-m", model.path, "-f", audio.path, "-l", language ?? "auto", "-oj", "-of", outputBase.path, "-np"])
+        _ = try ProcessRunner.run(runtime, Self.arguments(model: model, audio: audio, language: language, beamSize: beamSize, outputBase: outputBase))
         guard let root = try JSONSerialization.jsonObject(with: Data(contentsOf: jsonURL)) as? [String: Any], let items = root["transcription"] as? [[String: Any]] else {
             throw VoxError.message("Whisper n’a pas produit de transcription JSON valide.")
         }
@@ -76,8 +86,35 @@ final class WhisperEngine {
     }
 }
 
+struct LLMCompletion {
+    var text: String
+    /// Set when the warm server could not be used and `llama-cli` answered instead.
+    var warning: String?
+}
+
 final class LLMEngine {
-    func complete(model: URL, system: String, user: String, temperature: Double, context: Int) throws -> String {
+    private let server: LLMServerController?
+
+    init(server: LLMServerController? = nil) { self.server = server }
+
+    /// Warm path first: the `llama-server` kept alive by `LLMServerController`.
+    /// Any failure there falls back to a one-shot `llama-cli` run and is reported
+    /// as a warning, never as a failed dictation. Call off the main thread.
+    func complete(model: URL, system: String, user: String, temperature: Double, context: Int) throws -> LLMCompletion {
+        var warning: String?
+        if let server {
+            switch server.endpointBlocking(model: model, context: context) {
+            case .success(let endpoint):
+                do { return LLMCompletion(text: try endpoint.chat(system: system, user: user, temperature: temperature)) }
+                catch { warning = "Serveur LLM local indisponible (\(error.localizedDescription)) : llama-cli a été utilisé à la place." }
+            case .failure(let error):
+                warning = "Serveur LLM local non démarré (\(error.localizedDescription)) : llama-cli a été utilisé à la place."
+            }
+        }
+        return LLMCompletion(text: try completeWithCLI(model: model, system: system, user: user, temperature: temperature, context: context), warning: warning)
+    }
+
+    func completeWithCLI(model: URL, system: String, user: String, temperature: Double, context: Int) throws -> String {
         let runtime = try RuntimeLocator.executable("llama-cli")
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("voxlocal-\(UUID().uuidString)")
         let systemURL = scratch.appendingPathExtension("system.txt")
@@ -86,8 +123,32 @@ final class LLMEngine {
         try user.write(to: promptURL, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: systemURL); try? FileManager.default.removeItem(at: promptURL) }
         let (output, _) = try ProcessRunner.run(runtime, ["-m", model.path, "-sysf", systemURL.path, "-f", promptURL.path, "-c", String(max(1024, context)), "-n", "2048", "--temp", String(temperature), "--single-turn", "--no-display-prompt", "--no-show-timings", "--log-disable"])
-        let cleaned = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = Self.answer(fromCLIOutput: output, user: user)
         guard !cleaned.isEmpty else { throw VoxError.message("Le LLM local a retourné une réponse vide.") }
         return cleaned
+    }
+
+    /// The llama-cli of this llama.cpp revision is an interactive client: stdout
+    /// carries a loading spinner, a banner, the echoed prompt and a final
+    /// "Exiting...". Keep only what follows the echoed prompt.
+    static func answer(fromCLIOutput output: String, user: String) -> String {
+        var text = output
+        if let exit = text.range(of: "Exiting...", options: .backwards) { text = String(text[..<exit.lowerBound]) }
+        // Without the echo the output is banner or error text, never an answer:
+        // return nothing so the caller reports an empty answer instead of pasting it.
+        guard let marker = echoMarker(user: user), let echo = text.range(of: marker, options: .backwards) else { return "" }
+        return String(text[echo.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The echo llama-cli prints for a prompt read with `-f` (tools/cli/cli-ui.h):
+    /// the file minus one trailing newline, as `> <prompt>\n` up to 500 bytes, else
+    /// `> <first 500 bytes> ... (truncated)\n`. The byte cut may split a character;
+    /// lossy decoding yields the same replacement character as the decoded stdout.
+    static func echoMarker(user: String) -> String? {
+        var bytes = Array(user.utf8)
+        if bytes.last == UInt8(ascii: "\n") { bytes.removeLast() }
+        guard !bytes.isEmpty else { return nil }
+        guard bytes.count > 500 else { return "> " + String(decoding: bytes, as: UTF8.self) + "\n" }
+        return "> " + String(decoding: bytes.prefix(500), as: UTF8.self) + " ... (truncated)\n"
     }
 }

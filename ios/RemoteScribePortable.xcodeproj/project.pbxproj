@@ -15,7 +15,21 @@
 		A00000000000000000000006 /* FrameCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000006 /* FrameCodec.swift */; };
 		A00000000000000000000007 /* RemoteClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000007 /* RemoteClient.swift */; };
 		A00000000000000000000010 /* SecurePairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000010 /* SecurePairingStore.swift */; };
+		A00000000000000000000011 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* OnboardingView.swift */; };
+		A00000000000000000000012 /* QRPairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000012 /* QRPairingView.swift */; };
+		A00000000000000000000013 /* PairingLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000013 /* PairingLink.swift */; };
+		A00000000000000000000014 /* PairingLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* PairingLinkTests.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A90000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A50000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A40000000000000000000001;
+			remoteInfo = RemoteScribePortable;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A10000000000000000000001 /* RemoteScribePortableApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteScribePortableApp.swift; sourceTree = "<group>"; };
@@ -28,10 +42,22 @@
 		A10000000000000000000008 /* RemoteScribePortable.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RemoteScribePortable.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000010 /* SecurePairingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurePairingStore.swift; sourceTree = "<group>"; };
+		A10000000000000000000011 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		A10000000000000000000012 /* QRPairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRPairingView.swift; sourceTree = "<group>"; };
+		A10000000000000000000013 /* PairingLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingLink.swift; sourceTree = "<group>"; };
+		A10000000000000000000014 /* PairingLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingLinkTests.swift; sourceTree = "<group>"; };
+		A10000000000000000000015 /* RemoteScribePortableTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RemoteScribePortableTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A30000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A30000000000000000000005 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -46,6 +72,7 @@
 			children = (
 				A20000000000000000000002 /* RemoteScribePortable */,
 				A20000000000000000000003 /* Shared Core */,
+				A20000000000000000000005 /* RemoteScribePortableTests */,
 				A20000000000000000000004 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -58,6 +85,9 @@
 				A10000000000000000000003 /* PortableClientModel.swift */,
 				A10000000000000000000004 /* AudioStreamer.swift */,
 				A10000000000000000000010 /* SecurePairingStore.swift */,
+				A10000000000000000000013 /* PairingLink.swift */,
+				A10000000000000000000011 /* OnboardingView.swift */,
+				A10000000000000000000012 /* QRPairingView.swift */,
 				A10000000000000000000009 /* Info.plist */,
 			);
 			path = RemoteScribePortable;
@@ -77,8 +107,17 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000008 /* RemoteScribePortable.app */,
+				A10000000000000000000015 /* RemoteScribePortableTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A20000000000000000000005 /* RemoteScribePortableTests */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000014 /* PairingLinkTests.swift */,
+			);
+			path = RemoteScribePortableTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -101,6 +140,24 @@
 			productReference = A10000000000000000000008 /* RemoteScribePortable.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A40000000000000000000002 /* RemoteScribePortableTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A60000000000000000000003 /* Build configuration list for PBXNativeTarget "RemoteScribePortableTests" */;
+			buildPhases = (
+				A30000000000000000000004 /* Sources */,
+				A30000000000000000000005 /* Frameworks */,
+				A30000000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A80000000000000000000001 /* PBXTargetDependency */,
+			);
+			name = RemoteScribePortableTests;
+			productName = RemoteScribePortableTests;
+			productReference = A10000000000000000000015 /* RemoteScribePortableTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -113,6 +170,10 @@
 				TargetAttributes = {
 					A40000000000000000000001 = {
 						CreatedOnToolsVersion = 26.0;
+					};
+					A40000000000000000000002 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = A40000000000000000000001;
 					};
 				};
 			};
@@ -130,12 +191,20 @@
 			projectRoot = "";
 			targets = (
 				A40000000000000000000001 /* RemoteScribePortable */,
+				A40000000000000000000002 /* RemoteScribePortableTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A30000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A30000000000000000000006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -154,20 +223,41 @@
 				A00000000000000000000003 /* PortableClientModel.swift in Sources */,
 				A00000000000000000000004 /* AudioStreamer.swift in Sources */,
 				A00000000000000000000010 /* SecurePairingStore.swift in Sources */,
+				A00000000000000000000013 /* PairingLink.swift in Sources */,
+				A00000000000000000000011 /* OnboardingView.swift in Sources */,
+				A00000000000000000000012 /* QRPairingView.swift in Sources */,
 				A00000000000000000000005 /* RemoteProtocol.swift in Sources */,
 				A00000000000000000000006 /* FrameCodec.swift in Sources */,
 				A00000000000000000000007 /* RemoteClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A30000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000014 /* PairingLinkTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A80000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A40000000000000000000001 /* RemoteScribePortable */;
+			targetProxy = A90000000000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A70000000000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CLANG_ENABLE_MODULES = YES;
+				ENABLE_TESTABILITY = YES;
 				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -193,6 +283,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.voxlocal.remotescribe.portable;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -214,6 +305,40 @@
 			};
 			name = Release;
 		};
+		A70000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.voxlocal.remotescribe.portable.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RemoteScribePortable.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/RemoteScribePortable";
+			};
+			name = Debug;
+		};
+		A70000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.voxlocal.remotescribe.portable.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RemoteScribePortable.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/RemoteScribePortable";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -231,6 +356,15 @@
 			buildConfigurations = (
 				A70000000000000000000003 /* Debug */,
 				A70000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A60000000000000000000003 /* Build configuration list for PBXNativeTarget "RemoteScribePortableTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A70000000000000000000005 /* Debug */,
+				A70000000000000000000006 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

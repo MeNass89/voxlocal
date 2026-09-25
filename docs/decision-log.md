@@ -62,6 +62,18 @@ La preuve du big-endian est la boucle `value = value << 8 | byte` dans `readUInt
 - La confiance TLS du client iOS n'est pas présente dans le prototype fourni. Le serveur Windows sera donc livré avec une configuration TLS, mais l'intégration iOS sécurisée nécessitera une évolution coordonnée du `RemoteScribeClient`.
 - Aucun modèle médical ni clé GPU n'est embarqué. Le serveur fournit un adaptateur OpenAI-compatible et un mode mock pour les tests.
 
+## 2026-09-25 — Contrat de séquence aligné sur le Core Swift livré
+
+Constat : le client iOS durci (`ios/Core/Sources/RemoteClient.swift`) et les deux hôtes Python numérotaient toutes les frames avec un compteur global de connexion, exigeaient cette contiguïté côté serveur et comptaient `framesSent` en chunks. Le Core Swift livré (`RemoteScribe/Core/Sources`) fait autrement. Preuve : une sonde contre le binaire `RemoteScribeHost` compilé échoue avec `RemoteScribeError` au premier chunk audio en numérotation globale, et atteint `completed` en numérotation par session. L'iPhone ne pouvait donc pas dicter vers VoxLocal.app.
+
+Décision : le Core livré fait foi. Trois règles, appliquées au client iOS, au serveur Python de référence, à l'hôte Windows et au Core Swift :
+
+1. `sequence` n'a de sens que sur `AUDIO_CHUNK` : par session, premier chunk 0, strictement contigu. Toutes les autres frames (PAIR, START_SESSION, STOP_SESSION, PING, SESSION_STATUS, ERROR) portent 0 et le récepteur ignore le champ.
+2. `StopSessionRequest.framesSent` = nombre total d'échantillons PCM de la session = `bytesReceived / 2`. Un STOP incohérent est rejeté en `protocolViolation` par tous les hôtes, Core Swift compris (le WAV est d'abord fermé).
+3. PAIR est la première frame de la connexion, avec l'UUID nul ; un second PAIR est une violation ; START_SESSION avant PAIR donne `notPaired`.
+
+Vérification : `tests/test_real_host_interop.py` compile `RemoteScribeHost`, le lance avec un code d'appairage, et fait réaliser deux dictées successives sur une même connexion au client iOS ; deux `remote.wav` de 124 octets sont écrits.
+
 ## Méthode de travail
 
 Pour chaque modification :

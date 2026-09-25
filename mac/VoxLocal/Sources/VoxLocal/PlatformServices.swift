@@ -8,6 +8,9 @@ import Security
 enum PlatformServices {
     private static let cloudTokenService = "com.voxlocal.cloud-api-token"
     private static let cloudTokenAccount = "default"
+    private static let pairingCodeService = "com.voxlocal.remote-scribe"
+    private static let pairingCodeAccount = "pairing-code"
+    private static let pairingAlphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
     static var microphoneAuthorized: Bool { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }
     static var accessibilityAuthorized: Bool { AXIsProcessTrusted() }
 
@@ -38,6 +41,58 @@ enum PlatformServices {
             let status = SecItemDelete(base as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else { throw VoxError.message("Impossible de supprimer le token du trousseau macOS.") }
         }
+    }
+
+    /// Remote Scribe pairing code (dashless wire value), kept in the Keychain like the cloud token.
+    /// nil = no code stored (`errSecItemNotFound`). Throws on any other status, so a
+    /// locked or denied Keychain never leads the caller to replace the stored code.
+    static func remotePairingCode() throws -> String? {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: pairingCodeService, kSecAttrAccount as String: pairingCodeAccount,
+            kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw VoxError.message("Lecture du code d’appairage impossible dans le trousseau macOS (OSStatus \(status)).")
+        }
+        guard let data = item as? Data,
+              let code = String(data: data, encoding: .utf8), !code.isEmpty else { return nil }
+        return code
+    }
+
+    static func setRemotePairingCode(_ code: String?) throws {
+        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: pairingCodeService, kSecAttrAccount as String: pairingCodeAccount]
+        if let code, !code.isEmpty {
+            let data = Data(code.utf8)
+            let status = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            if status == errSecItemNotFound {
+                var item = base; item[kSecValueData as String] = data
+                guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw VoxError.message("Impossible d’enregistrer le code d’appairage dans le trousseau macOS.") }
+            } else if status != errSecSuccess { throw VoxError.message("Impossible de mettre à jour le code d’appairage dans le trousseau macOS.") }
+        } else {
+            let status = SecItemDelete(base as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw VoxError.message("Impossible de supprimer le code d’appairage du trousseau macOS.") }
+        }
+    }
+
+    /// 8 characters from an alphabet without look-alikes (no I, O, 0, 1), drawn with
+    /// SecRandomCopyBytes; 256 is a multiple of 32, so the modulo adds no bias.
+    /// Returned dashless: that is the wire value. Use `displayPairingCode` for the UI.
+    static func generatePairingCode() -> String {
+        var bytes = [UInt8](repeating: 0, count: 8)
+        if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) != errSecSuccess {
+            var generator = SystemRandomNumberGenerator()
+            bytes = bytes.map { _ in UInt8.random(in: .min ... .max, using: &generator) }
+        }
+        return String(bytes.map { pairingAlphabet[Int($0) % pairingAlphabet.count] })
+    }
+
+    /// "ABCD2345" → "ABCD-2345".
+    static func displayPairingCode(_ code: String) -> String {
+        guard code.count == 8 else { return code }
+        return "\(code.prefix(4))-\(code.suffix(4))"
     }
 
     static func requestMicrophone(_ completion: @escaping (Bool) -> Void) {

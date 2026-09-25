@@ -1,5 +1,7 @@
+import CryptoKit
 import Foundation
 import Network
+import Security
 
 struct DiscoveredRemoteScribeServer: Identifiable, Hashable {
     let name: String
@@ -56,14 +58,19 @@ final class RemoteScribeClient {
     var onPairResponse: ((PairResponse) -> Void)?
     var onSessionStatus: ((UUID, SessionStatusPayload) -> Void)?
     var onError: ((RemoteErrorPayload) -> Void)?
+    /// SHA-256 of the server's leaf certificate (DER), delivered once per TLS
+    /// connection during the handshake, before PAIR can be sent.
+    var onServerIdentity: ((Data) -> Void)?
 
     private let queue = DispatchQueue(label: "com.voxlocal.remote-scribe.client")
     private let queueKey = DispatchSpecificKey<Void>()
     private let decoder = RemoteFrameDecoder()
     private var connection: NWConnection?
     private var generation: UInt64 = 0
-    private var sequence: UInt64 = 0
-    private var expectedServerSequence: UInt64 = 0
+    // Remote Scribe v1 (shipped Core): only AUDIO_CHUNK carries a meaningful
+    // sequence, numbered 0, 1, 2… per session. Every other frame carries 0.
+    private var audioSequence: UInt64 = 0
+    // Total PCM sample frames of the session (bytes / 2, mono 16-bit).
     private var framesSent: UInt64 = 0
     private var sessionID: UUID?
     private var paired = false
@@ -78,12 +85,26 @@ final class RemoteScribeClient {
         return try queue.sync(execute: action)
     }
 
-    func connect(to endpoint: NWEndpoint, deviceID: String, deviceName: String, pairingCode: String?, tls: Bool = false) {
+    /// With `tls`, a non-nil `pinnedFingerprint` (SHA-256 of the leaf DER) is the
+    /// only accepted identity. Without a pin, only a certificate trusted by the
+    /// system (e.g. an MDM-provisioned CA) is accepted; any other certificate is
+    /// refused with `untrustedServer` so the user can confirm it (TOFU).
+    func connect(to endpoint: NWEndpoint, deviceID: String, deviceName: String, pairingCode: String?, tls: Bool = false, pinnedFingerprint: Data? = nil) {
         synchronized {
             disconnectLocked()
-            let connection = NWConnection(to: endpoint, using: Self.parameters(tls: tls))
-            self.connection = connection
             let generation = self.generation
+            let parameters: NWParameters
+            if tls {
+                // The verify block must be installed before NWParameters copies the options.
+                let options = NWProtocolTLS.Options()
+                sec_protocol_options_set_min_tls_protocol_version(options.securityProtocolOptions, .TLSv13)
+                installTrustEvaluation(on: options, generation: generation, pinnedFingerprint: pinnedFingerprint)
+                parameters = NWParameters(tls: options, tcp: NWProtocolTCP.Options())
+            } else {
+                parameters = .tcp
+            }
+            let connection = NWConnection(to: endpoint, using: parameters)
+            self.connection = connection
             connection.stateUpdateHandler = { [weak self, weak connection] state in
                 guard let self, let connection, self.connection === connection else { return }
                 switch state {
@@ -108,11 +129,11 @@ final class RemoteScribeClient {
         }
     }
 
-    func connect(host: String, port: UInt16, deviceID: String, deviceName: String, pairingCode: String?, tls: Bool = false) throws {
+    func connect(host: String, port: UInt16, deviceID: String, deviceName: String, pairingCode: String?, tls: Bool = false, pinnedFingerprint: Data? = nil) throws {
         guard !host.isEmpty, port > 0, let nwPort = NWEndpoint.Port(rawValue: port) else {
             throw RemoteScribeError(code: "transport", message: "Port TCP invalide.")
         }
-        connect(to: .hostPort(host: NWEndpoint.Host(host), port: nwPort), deviceID: deviceID, deviceName: deviceName, pairingCode: pairingCode, tls: tls)
+        connect(to: .hostPort(host: NWEndpoint.Host(host), port: nwPort), deviceID: deviceID, deviceName: deviceName, pairingCode: pairingCode, tls: tls, pinnedFingerprint: pinnedFingerprint)
     }
 
     func disconnect() { synchronized { disconnectLocked() } }
@@ -124,13 +145,11 @@ final class RemoteScribeClient {
         old?.cancel()
         resetSession()
         paired = false
-        sequence = 0
-        expectedServerSequence = 0
         pendingBytes = 0
         decoder.reset()
     }
 
-    private func resetSession() { sessionID = nil; framesSent = 0; stopped = false }
+    private func resetSession() { sessionID = nil; audioSequence = 0; framesSent = 0; stopped = false }
 
     // Abandon is local bookkeeping after a terminal server status. To cancel
     // a live recording, disconnect so the server also disposes of its session.
@@ -144,6 +163,7 @@ final class RemoteScribeClient {
             let id = UUID()
             try sendJSON(kind: .startSession, sessionID: id, value: StartSessionRequest(format: format, modeIdentifier: modeIdentifier, language: language, backend: backend))
             sessionID = id
+            audioSequence = 0
             framesSent = 0
             stopped = false
             return id
@@ -159,7 +179,7 @@ final class RemoteScribeClient {
             guard let sessionID, !stopped else { throw RemoteScribeError(code: "noActiveSession", message: "Aucune session distante n’est active.") }
             guard !data.isEmpty, data.count % 2 == 0 else { throw RemoteFrameError.invalidAudioChunk }
             try send(kind: .audioChunk, sessionID: sessionID, payload: data)
-            framesSent += 1
+            framesSent += UInt64(data.count / 2)
         }
     }
 
@@ -183,12 +203,13 @@ final class RemoteScribeClient {
 
     private func send(kind: RemoteMessageKind, sessionID: UUID, payload: Data) throws {
         guard let connection else { throw RemoteScribeError(code: "transport", message: "Connexion distante absente.") }
+        let sequence = kind == .audioChunk ? audioSequence : 0
         let data = try RemoteFrameEncoder.encode(RemoteFrame(kind: kind, sessionID: sessionID, sequence: sequence, payload: payload))
         guard pendingBytes + data.count <= maximumPendingBytes else {
             failLocked(code: "transport", message: "Le réseau ne transmet plus l’audio assez vite. La dictée a été interrompue.")
             throw RemoteScribeError(code: "transport", message: "File d’envoi audio saturée.")
         }
-        sequence += 1
+        if kind == .audioChunk { audioSequence += 1 }
         pendingBytes += data.count
         connection.send(content: data, completion: .contentProcessed { [weak self, weak connection] error in
             guard let self, let connection, self.connection === connection else { return }
@@ -202,11 +223,8 @@ final class RemoteScribeClient {
             guard let self, let connection, self.connection === connection else { return }
             if let data, !data.isEmpty {
                 do {
+                    // Server frames always carry sequence 0; the field is ignored.
                     for frame in try self.decoder.append(data) {
-                        guard frame.sequence == self.expectedServerSequence else {
-                            throw RemoteScribeError(code: "protocolViolation", message: "Séquence serveur non contiguë ou rejouée.")
-                        }
-                        self.expectedServerSequence &+= 1
                         try self.handle(frame)
                         if self.connection !== connection { return }
                     }
@@ -258,7 +276,6 @@ final class RemoteScribeClient {
         paired = false
         resetSession()
         pendingBytes = 0
-        expectedServerSequence = 0
         decoder.reset()
         deliver { $0.onError?(RemoteErrorPayload(code: code, message: message)) }
     }
@@ -271,12 +288,38 @@ final class RemoteScribeClient {
         }
     }
 
-    private static func parameters(tls: Bool) -> NWParameters {
-        guard tls else { return .tcp }
-        // System trust checks are retained; no certificate validation bypass.
-        // Pinning/mTLS provisioning remains a deployment prerequisite.
-        let options = NWProtocolTLS.Options()
-        sec_protocol_options_set_min_tls_protocol_version(options.securityProtocolOptions, .TLSv13)
-        return NWParameters(tls: options, tcp: NWProtocolTCP.Options())
+    /// Replaces the default certificate check. The block runs on `queue` during
+    /// the handshake, so `.ready` (and therefore PAIR) is never reached for a
+    /// refused identity. Accepting a matching pin deliberately skips the
+    /// hostname and CA checks: the pinned certificate *is* the server identity.
+    private func installTrustEvaluation(on options: NWProtocolTLS.Options, generation: UInt64, pinnedFingerprint: Data?) {
+        sec_protocol_options_set_verify_block(options.securityProtocolOptions, { [weak self] _, trustRef, complete in
+            // A superseded connection is refused silently.
+            guard let self, self.generation == generation, self.connection != nil else { complete(false); return }
+            let trust = sec_trust_copy_ref(trustRef).takeRetainedValue()
+            guard let leaf = (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first else {
+                self.failLocked(code: "transport", message: "Le serveur n’a présenté aucun certificat TLS.")
+                complete(false)
+                return
+            }
+            let observed = Data(SHA256.hash(data: SecCertificateCopyData(leaf) as Data))
+            self.deliver { $0.onServerIdentity?(observed) }
+            if let pinnedFingerprint {
+                guard observed == pinnedFingerprint else {
+                    self.failLocked(code: RemoteErrorPayload.pinMismatchCode, message: observed.base64EncodedString())
+                    complete(false)
+                    return
+                }
+                complete(true)
+                return
+            }
+            SecTrustEvaluateAsyncWithError(trust, self.queue) { [weak self] _, trusted, _ in
+                guard let self, self.generation == generation, self.connection != nil else { complete(false); return }
+                if !trusted {
+                    self.failLocked(code: RemoteErrorPayload.untrustedServerCode, message: observed.base64EncodedString())
+                }
+                complete(trusted)
+            }
+        }, queue)
     }
 }

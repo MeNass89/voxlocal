@@ -19,7 +19,7 @@ final class CloudGPUEngine {
         field("response_format", "json")
         body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
         body.append(try Data(contentsOf: audio)); body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-        var request = authorizedRequest(url: endpoint); request.httpMethod = "POST"; request.httpBody = body
+        var request = try authorizedRequest(url: endpoint); request.httpMethod = "POST"; request.httpBody = body
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         let data = try perform(request)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -32,7 +32,7 @@ final class CloudGPUEngine {
     func complete(system: String, user: String, temperature: Double) throws -> String {
         let payload: [String: Any] = ["model": try required(settings.cloudLlmModel, label: "modèle LLM cloud"), "temperature": temperature, "store": false,
             "messages": [["role": "system", "content": system], ["role": "user", "content": user]]]
-        var request = authorizedRequest(url: try url("v1/chat/completions")); request.httpMethod = "POST"
+        var request = try authorizedRequest(url: try url("v1/chat/completions")); request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let data = try perform(request)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -44,7 +44,7 @@ final class CloudGPUEngine {
     }
 
     func testConnection() throws -> [String] {
-        var request = authorizedRequest(url: try url("v1/models")); request.httpMethod = "GET"; request.timeoutInterval = 15
+        var request = try authorizedRequest(url: try url("v1/models")); request.httpMethod = "GET"; request.timeoutInterval = 15
         let data = try perform(request, timeout: 15)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let items = json["data"] as? [[String: Any]] else { return [] }
@@ -59,19 +59,29 @@ final class CloudGPUEngine {
             throw VoxError.message("L’adresse du GPU cloud est invalide.")
         }
         if scheme == "http" {
-            let host = value.host?.lowercased() ?? ""
-            let loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
-            guard loopback else {
+            guard Self.isLoopback(value) else {
                 throw VoxError.message("Le GPU cloud doit utiliser HTTPS. HTTP est réservé à un test sur localhost.")
             }
         }
         return value
     }
 
-    private func authorizedRequest(url: URL) -> URLRequest {
+    private static func isLoopback(_ url: URL) -> Bool {
+        let host = url.host?.lowercased() ?? ""
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    /// The token is mandatory: a dictation never leaves without it. The only
+    /// exception is a loopback URL, the local test path, which `url(_:)` already
+    /// restricts to HTTP on this machine.
+    private func authorizedRequest(url: URL) throws -> URLRequest {
         var request = URLRequest(url: url, timeoutInterval: timeout)
         let token = (settings.cloudApiToken ?? PlatformServices.cloudAPIToken())?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        } else if !Self.isLoopback(url) {
+            throw VoxError.message("Configurez le jeton du GPU cloud dans l’écran Calcul.")
+        }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
         request.setValue("required", forHTTPHeaderField: "X-Remote-Scribe-ZDR")
@@ -82,16 +92,24 @@ final class CloudGPUEngine {
         let effectiveTimeout = requestTimeout ?? timeout
         let semaphore = DispatchSemaphore(value: 0); var result: Result<Data, Error>?
         let configuration = URLSessionConfiguration.ephemeral; configuration.timeoutIntervalForRequest = effectiveTimeout; configuration.timeoutIntervalForResource = effectiveTimeout
-        URLSession(configuration: configuration).dataTask(with: request) { data, response, error in
+        // A redirect would resend the audio or the text (and the token) to another
+        // URL: the delegate refuses it and the 3xx itself becomes the failure.
+        let session = URLSession(configuration: configuration, delegate: RedirectRefusal(), delegateQueue: nil)
+        session.dataTask(with: request) { data, response, error in
             defer { semaphore.signal() }
             if let error { result = .failure(error); return }
             guard let http = response as? HTTPURLResponse, let data else { result = .failure(VoxError.message("Aucune réponse du GPU cloud.")); return }
+            guard !(300..<400).contains(http.statusCode) else {
+                result = .failure(VoxError.message("GPU cloud : redirection refusée (HTTP \(http.statusCode)).")); return
+            }
             guard data.count <= self.maxResponseBytes else { result = .failure(VoxError.message("La réponse du GPU cloud est trop volumineuse.")); return }
             guard (200..<300).contains(http.statusCode) else {
                 result = .failure(VoxError.message("GPU cloud : erreur HTTP \(http.statusCode).")); return
             }
             result = .success(data)
         }.resume()
+        // The session retains its delegate until invalidated.
+        session.finishTasksAndInvalidate()
         guard semaphore.wait(timeout: .now() + effectiveTimeout + 2) == .success, let result else { throw VoxError.message("Le GPU cloud n’a pas répondu dans le délai prévu.") }
         return try result.get()
     }
@@ -101,5 +119,12 @@ final class CloudGPUEngine {
             throw VoxError.message("Configurez le \(label) dans l’écran Calcul.")
         }
         return value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// Answers every redirect with "do not follow"; the task then completes with the 3xx.
+private final class RedirectRefusal: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

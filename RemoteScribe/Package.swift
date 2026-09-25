@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "RemoteScribe",
-    platforms: [.macOS(.v13), .iOS(.v16)],
+    platforms: [.macOS("15.0"), .iOS(.v16)],
     products: [
         .library(name: "RemoteScribeCore", targets: ["RemoteScribeCore"]),
         .executable(name: "RemoteScribeHost", targets: ["RemoteScribeHost"]),

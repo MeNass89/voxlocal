@@ -20,8 +20,9 @@ SWIFT_BUILD_PATH="${VOXLOCAL_SWIFT_BUILD_PATH:-$PROJECT_DIR/.build}"
     print -u2 "Documentation agent manquante: $AGENT_DOC_SOURCE_DIR/agent-api.md"; exit 4
 }
 
-for runtime in whisper-cli llama-cli; do
-    [[ -x "$PROJECT_DIR/Vendor/bin/$runtime" ]] || { print -u2 "Runtime manquant: Vendor/bin/$runtime"; exit 3; }
+RUNTIMES=(whisper-cli llama-cli llama-server)
+for runtime in "${RUNTIMES[@]}"; do
+    [[ -x "$PROJECT_DIR/Vendor/bin/$runtime" ]] || { print -u2 "Runtime manquant: Vendor/bin/$runtime (lancer ./build-runtimes.sh)"; exit 3; }
 done
 
 /bin/rm -rf -- "$APP_DIR"
@@ -31,8 +32,11 @@ cd "$PROJECT_DIR"
 /bin/cp "$SWIFT_BUILD_PATH/release/VoxLocal" "$MACOS/VoxLocal"
 /bin/cp "$PROJECT_DIR/App/Info.plist" "$CONTENTS/Info.plist"
 /bin/cp "$PROJECT_DIR/assets/VoxLocal.icns" "$RESOURCES/VoxLocal.icns"
-/bin/cp "$PROJECT_DIR/Vendor/bin/whisper-cli" "$RESOURCES/Runtimes/whisper-cli"
-/bin/cp "$PROJECT_DIR/Vendor/bin/llama-cli" "$RESOURCES/Runtimes/llama-cli"
+# llama-server keeps the selected LLM warm between dictations; llama-cli stays
+# as the fallback when the server cannot start.
+for runtime in "${RUNTIMES[@]}"; do
+    /bin/cp "$PROJECT_DIR/Vendor/bin/$runtime" "$RESOURCES/Runtimes/$runtime"
+done
 
 # Keep the API contract beside the app so support can inspect exactly what a
 # shipped DMG contains.  No Python interpreter or provider secret is copied.

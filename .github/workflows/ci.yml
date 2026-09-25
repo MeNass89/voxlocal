@@ -1,0 +1,232 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python-linux:
+    name: Python ${{ matrix.python }} (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # tests/test_swift_core.py and tests/test_real_host_interop.py skip themselves off macOS.
+      - name: Unit tests
+        run: |
+          python3 -m unittest discover -s windows -p 'test_*.py' -v
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          python3 -m unittest discover -s agent -p 'test_*.py' -v
+      - name: Byte-compile
+        if: ${{ !cancelled() }}
+        run: python3 -m py_compile server/voxlocal_server.py windows/*.py agent/*.py cloud/runpod/*.py
+
+  python-windows:
+    name: Python 3.12 + installer (windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests
+        shell: bash
+        run: |
+          python -m unittest discover -s windows -p 'test_*.py' -v
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          python -m unittest discover -s agent -p 'test_*.py' -v
+      - name: Byte-compile
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -m py_compile server/voxlocal_server.py windows/*.py agent/*.py cloud/runpod/*.py
+      # Parsed by PowerShell 7 and by Windows PowerShell 5.1, which runs the scheduled task launchers.
+      - name: Parse every PowerShell script
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $checker = Join-Path $env:RUNNER_TEMP 'parse-ps1.ps1'
+          Set-Content -LiteralPath $checker -Encoding UTF8 -Value @'
+          $failed = $false
+          foreach ($file in Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -File -Filter *.ps1) {
+              $tokens = $null; $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+              if ($errors) {
+                  $failed = $true
+                  foreach ($e in $errors) { Write-Host "::error file=$($file.FullName),line=$($e.Extent.StartLineNumber)::$($e.Message)" }
+              } else {
+                  Write-Host "PowerShell $($PSVersionTable.PSVersion) parsed $($file.FullName)"
+              }
+          }
+          if ($failed) { exit 1 }
+          '@
+          pwsh -NoProfile -File $checker
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 parse errors' }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $checker
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 parse errors' }
+      - name: Install the runtime for real
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'voxlocal'
+          # Run away from the checkout so `import agent` cannot resolve to the source tree.
+          Set-Location $env:RUNNER_TEMP
+          # No -RegisterScheduledTask: no task is registered; -MockTask only affects task registration.
+          pwsh -NoProfile -File "$env:GITHUB_WORKSPACE\windows\install-runtime.ps1" -InstallRoot $root -MockTask -PythonPath (Join-Path $env:pythonLocation 'python.exe')
+          if ($LASTEXITCODE -ne 0) { throw "install-runtime.ps1 exited with $LASTEXITCODE" }
+          $manifestPath = Join-Path $root 'windows-runtime.manifest.json'
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "manifest missing: $manifestPath" }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          Get-Content -LiteralPath $manifestPath -Raw
+          if (@($manifest.scheduledTasks).Count -ne 0) { throw 'no scheduled task was requested, but the manifest lists one' }
+          & "$root\.venv\Scripts\python.exe" -c 'import agent.voxlocal_agent_api as m, pathlib, sys; p = pathlib.Path(m.__file__).resolve(); print(p); assert str(p).lower().startswith(str(pathlib.Path(sys.argv[1]).resolve()).lower()), p' "$root\src"
+          if ($LASTEXITCODE -ne 0) { throw 'agent package is not importable from the installed venv' }
+      - name: Uninstall removes exactly the install root
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'voxlocal'
+          # ConfirmImpact is High: without -Confirm:$false the non-interactive runner would fail on the prompt.
+          & "$env:GITHUB_WORKSPACE\windows\uninstall-runtime.ps1" -InstallRoot $root -Confirm:$false
+          if (Test-Path -LiteralPath $root) { throw "install root still present: $root" }
+          if (-not (Test-Path -LiteralPath $env:RUNNER_TEMP)) { throw 'RUNNER_TEMP was removed' }
+          Write-Host "removed $root"
+      - name: Generate a TLS identity
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'tls'
+          $identity = & "$env:GITHUB_WORKSPACE\windows\new-tls-identity.ps1" -OutputDir $dir -HostName ci-runner
+          $files = @(Get-ChildItem -LiteralPath $dir -File | Sort-Object Name | ForEach-Object Name)
+          if (($files -join ',') -ne 'server.cert.pem,server.key.pem') { throw "unexpected files in ${dir}: $($files -join ', ')" }
+          # The pin the installer prints must equal SHA-256(DER) as the iPhone computes it.
+          $expected = python -c "import base64, hashlib, ssl, sys; print(base64.b64encode(hashlib.sha256(ssl.PEM_cert_to_DER_cert(open(sys.argv[1]).read())).digest()).decode())" "$($identity.CertPath)"
+          if ($LASTEXITCODE -ne 0) { throw 'python fingerprint check failed' }
+          if ($identity.FingerprintBase64 -ne $expected.Trim()) { throw "fingerprint mismatch: $($identity.FingerprintBase64) vs $expected" }
+          Write-Host "fingerprint ok: $($identity.FingerprintDisplay)"
+
+  macos:
+    name: Swift + Python + iOS (macOS)
+    runs-on: macos-26
+    # tests/test_swift_core.py and tests/test_real_host_interop.py compile Swift; up to 15 min cold.
+    timeout-minutes: 45
+    steps:
+      # The Swift packages do not reference mac/VoxLocal/Vendor, so the vendored C sources are not needed.
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Select Xcode 26.6
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.6.app
+          xcodebuild -version
+          swift --version
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            RemoteScribe/.build
+            mac/VoxLocal/.build
+            .build/remotescribe-host
+          key: swiftpm-${{ runner.os }}-xcode26.6-${{ hashFiles('RemoteScribe/Package.swift', 'mac/VoxLocal/Package.swift') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-xcode26.6-
+      - name: RemoteScribe Swift tests
+        working-directory: RemoteScribe
+        run: swift test
+      - name: Build VoxLocal.app binary
+        if: ${{ !cancelled() }}
+        working-directory: mac/VoxLocal
+        run: swift build -c release --product VoxLocal
+      # Here the Swift regression, the TLS pinning fixture and the real-host interop actually run.
+      - name: Python suites
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -m unittest discover -s windows -p 'test_*.py' -v
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          python3 -m unittest discover -s agent -p 'test_*.py' -v
+          python3 -m py_compile server/voxlocal_server.py windows/*.py agent/*.py cloud/runpod/*.py
+      - name: Build the iOS app (unsigned, iphoneos SDK)
+        if: ${{ !cancelled() }}
+        run: CODE_SIGNING_ALLOWED=NO ./scripts/build-ios.sh
+
+  harness:
+    name: Clinical harness (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Installs take seconds; the loop test runs the real dsh + bridge with a scripted model (~20 s).
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-26]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # The profile pins dsh 0.1.7-rc.2; the plugins lock their own dev dependencies (vitest, dsh types).
+      - name: Install the pinned dsh profile and the plugins
+        run: |
+          (cd harness/profile && pnpm install --frozen-lockfile)
+          for dir in harness/plugins/*/; do
+            if [ -f "$dir/pnpm-lock.yaml" ]; then (cd "$dir" && pnpm install --frozen-lockfile); fi
+          done
+      - name: Plugin tests (vitest)
+        run: |
+          for dir in harness/plugins/*/; do
+            echo "::group::$dir"
+            (cd "$dir" && pnpm test)
+            echo "::endgroup::"
+          done
+      # test_loop.py drives harness/profile/node_modules/.bin/dsh against the mock bridge and a scripted
+      # OpenAI-compatible stub; it skips itself when dsh is not installed, so assert it is.
+      - name: Python harness tests (bridge, feeder, loop)
+        if: ${{ !cancelled() }}
+        run: |
+          test -x harness/profile/node_modules/.bin/dsh
+          python3 -m unittest discover -s harness/tests -t . -v
+      - name: PowerShell launchers (pwsh smoke)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          # Refusals: no token, and a non-loopback web host.
+          if VOXLOCAL_API_TOKEN= pwsh -NoProfile -File harness/ingest/run-feeder.ps1 --once; then exit 1; fi
+          if VOXLOCAL_LLM_URL=https://pod.invalid/v1 VOXLOCAL_LLM_TOKEN=x pwsh -NoProfile -File harness/run-web.ps1 --host 0.0.0.0; then exit 1; fi
+          # One real feeder pass through the launcher against the mock agent API, seeded with the entorse dictation.
+          export VOXLOCAL_AGENT_TOKEN="ci-$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+          export VOXLOCAL_API_TOKEN="$VOXLOCAL_AGENT_TOKEN"
+          python3 -m agent.voxlocal_agent_api serve --mock --port 47399 &
+          agent_pid=$!
+          trap 'kill $agent_pid' EXIT
+          for _ in $(seq 1 50); do curl -fs -o /dev/null http://127.0.0.1:47399/healthz -H "Authorization: Bearer $VOXLOCAL_API_TOKEN" && break; sleep 0.2; done
+          state="$RUNNER_TEMP/feeder"
+          pwsh -NoProfile -File harness/ingest/run-feeder.ps1 --api-url http://127.0.0.1:47399 --backend dryrun --once \
+            --state-file "$state/state.json" --seed-file harness/bridge/fixtures/transcript_entorse.txt --patient-context pat-001
+          test "$(wc -l < "$state/dryrun.jsonl")" -eq 1

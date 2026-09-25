@@ -1,0 +1,18 @@
+# SYNTHETIC dictation — not a real patient. For pipeline simulation only.
+# Simulates ~5 min of ER dictation, ankle-sprain protocol.
+
+Alors patient jeune, la vingtaine, se présente aux urgences pour une douleur de la
+cheville droite suite à un traumatisme en inversion ce matin en jouant au foot. Pas de
+craquement entendu. A pu poser le pied mais avec douleur. Pas d'antécédent particulier,
+pas de traitement habituel, pas d'allergie connue.
+
+A l'examen, oedème modéré de la malléole externe droite, douleur à la palpation du
+ligament talo-fibulaire antérieur. Pas de douleur osseuse à la palpation de la malléole
+postérieure, pas de douleur base du cinquième métatarsien. Appui possible sur quatre pas.
+Critères d'Ottawa négatifs. Reste de l'examen sans particularité.
+
+Donc entorse de cheville droite stade deux probable, critères d'Ottawa négatifs donc pas
+d'indication de radiographie. Je mets en place le protocole entorse: repos, glace,
+compression par bandage, élévation. Antalgie par paracétamol et AINS si pas de contre
+indication. Attelle de cheville pour deux semaines. Arrêt de travail trois jours. Contrôle
+chez le médecin traitant dans une semaine, reconsulter si aggravation.

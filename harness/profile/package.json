@@ -1,0 +1,23 @@
+{
+  "name": "dsh-profile-scribe",
+  "private": true,
+  "description": "VoxLocal clinical scribe: a dsh profile over the shipped web stack with the voxlocal-gpu provider, the scribe plugins and the approval gate",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.7-rc.2",
+    "@voxlocal/dsh-voxlocal-tools": "link:../plugins/voxlocal-tools",
+    "@voxlocal/portail-tools": "link:../plugins/portail-tools",
+    "@voxlocal/scribe-approval": "link:../plugins/scribe-approval",
+    "@voxlocal/scribe-persona": "link:../plugins/scribe-persona"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app"
+      ]
+    }
+  }
+}
