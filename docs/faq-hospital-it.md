@@ -145,10 +145,41 @@ aucun Pod n’a encore été provisionné. Avant toute donnée patient, le fourn
 doit fournir un DPA, un engagement de zéro rétention, la région de traitement et
 la politique de journaux. Voir [Fournisseur GPU](security-whitepaper.md#fournisseur-gpu).
 
-### 16. Qu’est-ce qui manque avant un pilote avec des patients réels ?
+### 16. L’agent peut-il écrire dans le dossier patient ?
+
+Il prépare, il n’écrit pas seul. L’agent du [harness clinique](../harness/README.md)
+lit la dictée et le dossier, puis crée des **brouillons** section par section
+(examen clinique, conclusion, orientation…), avec des citations exactes de la
+dictée. L’écriture ne passe que par le pont portail, qui la refuse tant qu’un
+médecin n’a pas approuvé ce brouillon précis. Il n’a ni terminal, ni accès aux
+fichiers, et ne parle jamais directement au portail. Aujourd’hui, l’accès au
+portail de l’hôpital est fermé : le pont écrit dans un mock avec des patients
+synthétiques. Voir [Agent et portail](security-whitepaper.md#agent-et-portail).
+
+### 17. Comment se passe le feu vert ?
+
+Dans le chat web du harness, sur le poste (`127.0.0.1` uniquement). Quand l’agent
+veut appliquer un brouillon, le chat affiche le patient, la rencontre, la
+section, le diff exact et les citations. « Allow once » transmet l’accord au pont
+avec un jeton que le modèle n’a pas ; l’accord vaut pour ce brouillon, une fois,
+pendant 10 minutes. Si la section a changé entre-temps ou si le brouillon a été
+modifié, le pont refuse (409) et l’agent doit repartir d’un nouveau brouillon.
+« Reject » ou absence de réponse : rien n’est écrit.
+
+### 18. Qu’est-ce qui est journalisé pour l’agent ?
+
+Deux journaux, sur le poste : `harness/audit/approvals.jsonl` (chaque décision du
+médecin et son résultat, avec son nom) et `harness/audit/portal-writes.jsonl`
+(chaque écriture ou refus du pont, avec identifiant d’approbation et
+empreintes). Ils contiennent des identifiants et des empreintes, jamais le texte
+clinique. Les brouillons, eux, contiennent le texte proposé : leur rétention est
+à fixer avec votre DPO avant le portail réel.
+
+### 19. Qu’est-ce qui manque avant un pilote avec des patients réels ?
 
 La signature Apple (distribution iOS, Developer ID et notarisation macOS),
 l’enrôlement des appareils (mTLS par MDM), la politique de rétention sur le Mac,
 le contrat GPU si l’option est retenue, la validation DPO et la validation
-clinique, et un essai Windows sur un poste réel. Liste suivie dans
+clinique, un essai Windows sur un poste réel et, pour le harness clinique,
+l’accès au portail et la mesure du modèle réel. Liste suivie dans
 [`release-readiness.md`](release-readiness.md).

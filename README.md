@@ -42,6 +42,21 @@ Pour un DMG signé ad hoc, depuis la racine : `./scripts/build-macos.sh`.
 
 **iPhone / iPad.** Ouvrir `ios/RemoteScribePortable.xcodeproj` dans Xcode, choisir votre Personal Team dans **Signing & Capabilities**, sélectionner l’appareil, puis **Run**. Sur le Mac, ouvrir l’écran **iPhone** de VoxLocal et scanner le QR code avec l’app. Parcours complet : [`docs/demo-runbook.md`](docs/demo-runbook.md) et [`docs/install-and-test.md`](docs/install-and-test.md).
 
+## Harness clinique
+
+Une couche d’agent sur le poste du médecin, dans [`harness/`](harness/README.md). La dictée terminée et nettoyée arrive à un agent ([DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) `dsh` 0.1.7-rc.2, modèle Qwen3.8-27B servi par le GPU privé). L’agent lit le dossier, prépare un brouillon par section avec des citations exactes de la dictée, puis **attend un feu vert explicite** du médecin dans le chat web avant d’écrire dans le portail patient. Le pont portail, pas l’agent, décide : sans approbation humaine de ce brouillon précis, il refuse l’écriture.
+
+Le portail réel est fermé pour l’instant : le pont tourne sur un **mock enregistré** (patients synthétiques) qui reproduit ses contraintes.
+
+```bash
+export VOXLOCAL_LLM_URL='https://<pod>:8443/llm/v1' VOXLOCAL_LLM_TOKEN='…'
+export PORTAIL_BRIDGE_TOKEN="$(openssl rand -hex 24)" PORTAIL_BRIDGE_APPROVER_TOKEN="$(openssl rand -hex 24)"
+python3 -m harness.bridge.portail_bridge --backend mock &   # pont portail sur 127.0.0.1:47368
+harness/run-web.sh                                          # Windows : harness\run-web.ps1
+```
+
+Architecture, lancement, posture de sécurité et tests : [`harness/README.md`](harness/README.md). Détail sécurité : [Agent et portail](docs/security-whitepaper.md#agent-et-portail).
+
 ## Sécurité en une page
 
 - Transport iPhone → poste en TLS 1.3. L’iPhone épingle le SHA-256 du certificat DER du poste (confirmation à la première connexion, ou empreinte lue dans le QR code). Une empreinte qui change est refusée avant tout envoi d’audio ; un QR code ne remplace jamais une empreinte déjà épinglée.
@@ -62,6 +77,7 @@ Ces portes dépendent d’un compte, d’un appareil, d’un fournisseur ou de l
 - **Conformité** : DPA et zéro rétention (ZDR) du fournisseur GPU, validation DPO, politique de rétention de l’historique Mac.
 - **Validation clinique** du flux et des textes réécrits.
 - **Windows** sur un vrai poste hospitalier : l’installateur est exécuté en CI, pas encore sur un poste du parc, et le service signé reste à faire.
+- **Portail patient** : accès fermé ; le harness écrit dans un mock enregistré. Le modèle Qwen3.8-27B n’a pas encore été mesuré sur le Pod, et le harness n’a pas encore tourné sur un poste Windows.
 
 Suivi détaillé : [`docs/release-readiness.md`](docs/release-readiness.md) et [`docs/roadmap.md`](docs/roadmap.md).
 
@@ -75,6 +91,7 @@ Suivi détaillé : [`docs/release-readiness.md`](docs/release-readiness.md) et [
 | [`server/`](server) | Hôte Python de référence [`voxlocal_server.py`](server/voxlocal_server.py) pour Windows et macOS : TLS 1.3, quotas, mock explicite, GPU OpenAI-compatible en HTTPS. |
 | [`agent/`](agent) | API loopback et CLI JSON pour les harness d’agents ; [`run-windows.ps1`](agent/run-windows.ps1) lance le service Windows sans secret en ligne de commande. |
 | [`windows/`](windows) | Installateur, désinstallateur, identité TLS et pare-feu Windows ; codec Python v1 et hôte de compatibilité pour tests synthétiques. |
+| [`harness/`](harness) | Harness clinique : profil `dsh` « scribe », quatre plugins (dictées, outils portail, feu vert, persona), pont portail et mock enregistré, feeder de dictées, lanceurs macOS et Windows. |
 | [`cloud/runpod/`](cloud/runpod) | Runtime GPU privé : supervision, porte HTTPS, banc de mesure synthétique. |
 | [`tests/`](tests) | Tests du serveur, du runtime RunPod, de régression du Core Swift et d’interopérabilité contre le vrai `RemoteScribeHost`. |
 | [`scripts/`](scripts) | Builds iOS et macOS, identité TLS macOS/Linux, banc de mesure Mac. |
@@ -94,18 +111,22 @@ python3 -m unittest discover -s agent -p 'test_*.py' -v
 python3 -m py_compile server/voxlocal_server.py windows/*.py agent/*.py cloud/runpod/*.py
 (cd RemoteScribe && swift test)
 (cd mac/VoxLocal && swift build -c release --product VoxLocal)
+python3 -m unittest discover -s harness/tests -t . -v   # après (cd harness/profile && pnpm install --frozen-lockfile)
+for d in harness/plugins/*/; do (cd "$d" && pnpm install --frozen-lockfile && pnpm test); done
 xcodebuild -quiet -project ios/RemoteScribePortable.xcodeproj -target RemoteScribePortable -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO build
 ```
 
 | Suite | Tests au 25 septembre 2026 |
 |---|---|
 | `windows/` | 5 |
-| `tests/` | 48 (40 hors macOS : les tests Swift, bash et POSIX se sautent eux-mêmes) |
-| `agent/` | 9 |
+| `tests/` | 55 sur macOS, dont 1 sauté sans `caddy` (hors macOS, les tests Swift, bash et POSIX se sautent eux-mêmes) |
+| `agent/` | 15 |
 | `RemoteScribe` (`swift test`) | 8 |
+| `harness/tests/` (pont, feeder, boucle `dsh`) | 58 |
+| `harness/plugins/*` (vitest) | 41 (13 + 12 + 7 + 9) |
 | iOS XCTest (`RemoteScribePortableTests`, simulateur) | 8 |
 
-La CI GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) exécute ces suites sur ubuntu (Python 3.11 et 3.12), Windows (installateur réel, désinstallation, identité TLS) et macOS (Swift, build VoxLocal, suites Python dont l’interop contre `RemoteScribeHost`, build iOS non signé). Run 36130936691 sur le commit `766015b` : quatre jobs verts. Les XCTest iOS tournent en local sur simulateur.
+La CI GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) exécute ces suites sur ubuntu (Python 3.11 et 3.12), Windows (installateur réel, désinstallation, identité TLS) et macOS (Swift, build VoxLocal, suites Python dont l’interop contre `RemoteScribeHost`, build iOS non signé). Run 36130936691 sur le commit `766015b` : quatre jobs verts. Un cinquième job, `harness` (ubuntu et macOS : installation verrouillée de `dsh` et des plugins, vitest, tests Python du harness, lanceurs PowerShell sous `pwsh`), est ajouté le 25 septembre et n’a pas encore tourné sur GitHub ; ses commandes passent en local. Les XCTest iOS tournent en local sur simulateur.
 
 ## Documentation
 
