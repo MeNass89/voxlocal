@@ -1,0 +1,48 @@
+{
+  "synthetic": true,
+  "note": "Patient fictif. Aucune donnée réelle.",
+  "patient": {
+    "patient_id": "pat-003",
+    "ehr_id": "1f19a003-0000-4000-8000-000000000003",
+    "tpms": "TPMS-900003",
+    "display_name": "DUBOIS Henri",
+    "birth_date": "1954-02-27",
+    "sex": "M"
+  },
+  "fhir": {
+    "allergies": [
+      {"resourceType": "AllergyIntolerance", "code": {"text": "Pénicillines"}, "criticality": "high", "reaction": [{"manifestation": [{"text": "urticaire généralisée"}]}]}
+    ],
+    "conditions": [
+      {"resourceType": "Condition", "code": {"text": "Hypertension artérielle"}, "clinicalStatus": "active"},
+      {"resourceType": "Condition", "code": {"text": "Diabète de type 2"}, "clinicalStatus": "active"},
+      {"resourceType": "Condition", "code": {"text": "BPCO GOLD 2"}, "clinicalStatus": "active"}
+    ],
+    "medications": [
+      {"resourceType": "MedicationStatement", "medicationCodeableConcept": {"text": "Metformine 1000 mg"}, "dosage": [{"text": "1 comprimé matin et soir"}], "status": "active"},
+      {"resourceType": "MedicationStatement", "medicationCodeableConcept": {"text": "Amlodipine 5 mg"}, "dosage": [{"text": "1 comprimé le matin"}], "status": "active"},
+      {"resourceType": "MedicationStatement", "medicationCodeableConcept": {"text": "Tiotropium 18 µg inhalation"}, "dosage": [{"text": "1 inhalation par jour"}], "status": "active"}
+    ]
+  },
+  "items": [
+    {
+      "item_id": "1f19a003-aaaa-4000-8000-000000000301",
+      "source_id": "ERA_EHR",
+      "template_id": "in-patient-care-procedure",
+      "version": 5,
+      "contact": {"encounter_id": "enc-003-hosp", "type": "hospitalisation", "start": "2026-09-23T18:05:00+02:00"},
+      "domain": {"code": "MINT", "text": "Médecine interne"},
+      "attributes": [
+        {"name": "current-affliction", "values": {"_value_1": [{"text": {"content": "Toux productive et dyspnée d'effort depuis 4 jours, fièvre à 38,9 °C.", "language": "fr"}}]}},
+        {"name": "main-problem-history", "values": {"_value_1": [{"text": {"content": "BPCO connue, deux exacerbations en 2025.", "language": "fr"}}]}},
+        {"name": "physical-exam-text", "values": {"_value_1": [{"text": {"content": "SpO2 91 % AA, FR 24/min. Crépitants base droite.", "language": "fr"}}]}},
+        {"name": "systematic-review-text", "values": {"_value_1": [{"text": {"content": "Pas de douleur thoracique. Pas d'oedème des membres inférieurs.", "language": "fr"}}]}},
+        {"name": "text-evolution", "values": {"_value_1": [{"text": {"content": "J1 : apyrexie sous traitement. J2 : SpO2 94 % sous 2 L/min d'O2.", "language": "fr"}}]}},
+        {"name": "text-conclusion", "values": {"_value_1": [{"text": {"content": "Pneumopathie communautaire lobaire inférieure droite chez un patient BPCO.", "language": "fr"}}]}},
+        {"name": "disposition", "values": {"_value_1": [{"text": {"content": "Hospitalisation en médecine interne. Allergie aux pénicillines : antibiothérapie adaptée.", "language": "fr"}}]}},
+        {"name": "other-risk-text", "values": {"_value_1": [{"text": {"content": "Ancien fumeur, 40 paquets-années, sevré en 2015.", "language": "fr"}}]}}
+      ]
+    }
+  ],
+  "suggestions": []
+}

@@ -1,0 +1,60 @@
+{
+  "synthetic": true,
+  "note": "Patient fictif. Aucune donnée réelle. Cas « entorse » aligné sur transcript_entorse.txt.",
+  "patient": {
+    "patient_id": "pat-001",
+    "ehr_id": "1f19a001-0000-4000-8000-000000000001",
+    "tpms": "TPMS-900001",
+    "display_name": "MARTIN Lucas",
+    "birth_date": "2003-04-12",
+    "sex": "M"
+  },
+  "fhir": {
+    "allergies": [],
+    "conditions": [],
+    "medications": []
+  },
+  "items": [
+    {
+      "item_id": "1f19a001-aaaa-4000-8000-000000000101",
+      "source_id": "ERA_EHR",
+      "template_id": "out-patient-care-procedure",
+      "version": 3,
+      "contact": {"encounter_id": "enc-001-urg", "type": "urgences", "start": "2026-09-25T09:42:00+02:00"},
+      "domain": {"code": "URG", "text": "Service des urgences"},
+      "attributes": [
+        {"name": "title", "values": {"_value_1": [{"text": {"content": "Prise en charge urgences", "language": "fr"}}]}},
+        {"name": "current-affliction", "values": {"_value_1": [{"text": {"content": "Motif (tri IOA) : traumatisme de la cheville droite ce matin au football.", "language": "fr"}}]}},
+        {"name": "main-problem-history", "values": {"_value_1": [{"text": {"content": "", "language": "fr"}}]}},
+        {"name": "physical-exam-text", "values": {"_value_1": [{"text": {"content": "Paramètres à l'arrivée : TA 124/78 mmHg, FC 82/min, T° 36,8 °C, SpO2 99 % AA. EVA 6/10 cheville droite. Marche avec boiterie, cheville droite surélevée en salle d'attente.", "language": "fr"}}]}},
+        {"name": "systematic-review-text", "values": {"_value_1": [{"text": {"content": "", "language": "fr"}}]}},
+        {"name": "text-evolution", "values": {"_value_1": [{"text": {"content": "", "language": "fr"}}]}},
+        {"name": "text-conclusion", "values": {"_value_1": [{"text": {"content": "", "language": "fr"}}]}},
+        {"name": "disposition", "values": {"_value_1": [{"text": {"content": "", "language": "fr"}}]}},
+        {"name": "other-risk-text", "values": {"_value_1": [{"text": {"content": "Non-fumeur. Pas de consommation d'alcool rapportée.", "language": "fr"}}]}}
+      ]
+    },
+    {
+      "item_id": "1f19a001-bbbb-4000-8000-000000000102",
+      "source_id": "ERA_EHR",
+      "template_id": "out-patient-care-procedure",
+      "version": 1,
+      "contact": null,
+      "domain": null,
+      "note": "Piège : item créé via l'API sans rencontre ni service. Récupérable par id, invisible dans toutes les vues.",
+      "attributes": [
+        {"name": "physical-exam-text", "values": {"_value_1": [{"text": {"content": "Note de test non classée.", "language": "fr"}}]}}
+      ]
+    }
+  ],
+  "suggestions": [
+    {
+      "item_suggestion_id": "1f19a001-cccc-4000-8000-000000000103",
+      "status": "PENDING",
+      "note": "Piège : les suggestions (saveItemSuggestion) sont invisibles pour le clinicien. Jamais exposées par le mock.",
+      "attributes": [
+        {"name": "content", "values": {"_value_1": [{"text": {"content": "Suggestion de test.", "language": "fr"}}]}}
+      ]
+    }
+  ]
+}

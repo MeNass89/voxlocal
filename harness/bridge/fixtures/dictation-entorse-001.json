@@ -1,0 +1,7 @@
+{
+  "synthetic": true,
+  "dictation_id": "dict-entorse-001",
+  "patient_context": {"patient_id": "pat-001", "encounter_id": "enc-001-urg"},
+  "text_file": "transcript_entorse.txt",
+  "note": "Le texte de la dictée est le contenu de text_file sans les lignes d'en-tête commençant par « # » ni la ligne vide qui les suit."
+}
