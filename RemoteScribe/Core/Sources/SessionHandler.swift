@@ -105,11 +105,15 @@ public final class RemoteSessionHandler {
     private func stop(_ frame: RemoteFrame) throws {
         guard let receiver else { throw RemoteScribeError.noActiveSession }
         guard receiver.session.id == frame.sessionID else { throw RemoteScribeError.sessionMismatch }
-        _ = try frame.decode(StopSessionRequest.self)
+        let request = try frame.decode(StopSessionRequest.self)
         guard let backend = activeBackend else { throw RemoteScribeError.noActiveSession }
         self.receiver = nil
         self.activeBackend = nil
         let session = try receiver.finish()
+        let expectedFrames = session.bytesReceived / 2
+        guard request.framesSent == expectedFrames else {
+            throw RemoteScribeError.protocolViolation("framesSent \(request.framesSent) ≠ échantillons reçus \(expectedFrames)")
+        }
         sendStatus(.processing, backend: backend.kind, sessionID: session.id, bytes: session.bytesReceived, message: "Audio reçu, traitement en cours.")
         backend.process(session: session) { [weak self] result in
             guard let self else { return }

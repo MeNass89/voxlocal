@@ -1,10 +1,13 @@
 import Foundation
 import Network
 
-// Executed by test_swift_core.py against a socket fixture; no iOS SDK needed.
+// Executed by test_swift_core.py against a socket fixture, and by
+// test_real_host_interop.py against the compiled RemoteScribeHost; no iOS SDK
+// needed. Modes: "plain", "reconnect" (fixture) and "realhost".
 let client = RemoteScribeClient()
 let port = UInt16(CommandLine.arguments[1])!
 let reconnect = CommandLine.arguments[2] == "reconnect"
+let realHost = CommandLine.arguments[2] == "realhost"
 var reconnectDone = false
 var completed = 0
 var session: UUID?
@@ -30,7 +33,9 @@ client.onSessionStatus = { id, status in
     guard id == session else { fail("stale session callback") }
     switch status.state {
     case .recording:
-        // Several producers must preserve a single contiguous wire sequence.
+        // Several producers must preserve a contiguous per-session audio
+        // sequence 0..19. After these 20 chunks of 4 bytes, STOP must carry
+        // framesSent == 40 (PCM samples); the fixture and the real host check it.
         DispatchQueue.concurrentPerform(iterations: 20) { _ in
             do { try client.sendAudio(Data([0, 0, 1, 0])) }
             catch { fail("audio: \(error)") }
@@ -44,6 +49,12 @@ client.onSessionStatus = { id, status in
     case .completed:
         completed += 1
         if completed == 1 { start() } // Requires terminal session release.
+        else if realHost && completed == 2 {
+            // The real host keeps the connection open; end the test here.
+            client.disconnect()
+            print("real host: two sessions completed on one connection")
+            exit(0)
+        }
     default:
         break
     }

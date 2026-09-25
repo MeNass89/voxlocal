@@ -121,7 +121,26 @@ Base64.
 
 ## Séquence et états attendus
 
-1. Le client ouvre TCP, remet sa séquence à zéro et envoie `PAIR` avec
+Contrat canonique (source de vérité : `RemoteScribe/Core/Sources`) :
+
+- `sequence` is meaningful only on AUDIO_CHUNK frames: per session, first chunk 0, strictly contiguous. On every other frame (PAIR, START_SESSION, STOP_SESSION, PING, SESSION_STATUS, ERROR) the sender writes 0 and the receiver ignores the field.
+- `StopSessionRequest.framesSent` = total PCM sample frames of the session = `bytesReceived / 2` (mono, 16-bit). Servers reject a STOP whose `framesSent` differs from `bytesReceived / 2` with `protocolViolation`.
+- PAIR must be the first frame of a connection, with session UUID `00000000-0000-0000-0000-000000000000`; a second PAIR is a protocol violation. START_SESSION before PAIR is `notPaired`.
+
+Correction du 2026-09-25 : la reconstruction initiale affirmait que le client
+incrémentait une séquence globale pour chaque frame envoyée et comptait les
+chunks dans `framesSent`. C'était faux. Le source livré le prouve :
+`RemoteClient.swift` remet `sequence = 0` dans `startSession`, ne numérote que
+les `AUDIO_CHUNK`, envoie 0 sur toutes les autres frames et compte
+`framesSent += bytes / 2`; côté serveur, `WAVRemoteAudioReceiver` ne vérifie
+que la contiguïté des chunks audio de la session et `RemoteSessionHandler`
+envoie toutes ses frames avec la séquence 0. Une sonde contre le binaire
+`RemoteScribeHost` compilé l'a confirmé : numérotation globale → erreur au
+premier chunk audio; numérotation par session → `completed`. Le client iOS et
+les deux hôtes Python suivent désormais ce contrat, vérifié par
+`tests/test_real_host_interop.py`.
+
+1. Le client ouvre TCP et envoie `PAIR` (séquence 0) avec
    `sessionID=noSession`, `PairRequest.protocolVersion=1` et, si nécessaire,
    le code d'appairage.
 2. Le serveur refuse toute autre kind avant PAIR. En cas d'acceptation il
@@ -134,11 +153,13 @@ Base64.
    `backend` demandé ou le backend par défaut et commence à recevoir.
 4. `AUDIO_CHUNK` réutilise l'UUID de la session et transporte les échantillons
    PCM little-endian. Le récepteur WAV commence à la séquence 0 et exige des
-   séquences contiguës (une répétition ou un saut est une erreur). Le client
-   incrémente une séquence globale pour chaque frame envoyée et compte les
-   chunks dans `StopSessionRequest.framesSent`.
-5. `STOP_SESSION` contient le nombre de chunks envoyés. Le serveur termine le
-   WAV, publie `processing`, puis publie `completed` avec les textes/chemins
+   séquences contiguës au sein de la session (une répétition ou un saut est
+   une erreur). Le client remet son compteur audio à 0 à chaque
+   `START_SESSION` et compte les échantillons PCM (`octets / 2`) dans
+   `StopSessionRequest.framesSent`.
+5. `STOP_SESSION` (séquence 0) contient le nombre d'échantillons PCM envoyés.
+   Le serveur termine le WAV, rejette le STOP si `framesSent` diffère de
+   `bytesReceived / 2`, sinon publie `processing`, puis publie `completed` avec les textes/chemins
    disponibles, ou `failed` avec `message`. La réception d'un kind 5 côté
    client est donc un callback `(sessionID, SessionStatusPayload)`.
 6. `PING` utilise normalement `noSession` et `PingPayload.timestamp`; le

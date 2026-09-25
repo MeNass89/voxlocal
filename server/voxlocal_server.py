@@ -267,8 +267,9 @@ class RemoteScribeConnection:
     def __init__(self, server: "RemoteScribeServer", reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         self.server, self.reader, self.writer = server, reader, writer
         self.paired = False
-        self.sequence = 0
-        self.expected_client_sequence = 0
+        # Shipped Core contract: only audio chunks carry a meaningful sequence
+        # (per session, from 0). PAIR must still be the first frame.
+        self.frames_seen = 0
         self.session: Optional[Session] = None
         self.peer = str((writer.get_extra_info("peername") or ("unknown",))[0])
 
@@ -280,10 +281,8 @@ class RemoteScribeConnection:
                     remaining = self.server.config.max_session_seconds - (time.monotonic() - self.session.started_at)
                     timeout = min(self.server.config.chunk_timeout, remaining)
                 kind, session_id, sequence, payload = await asyncio.wait_for(read_frame(self.reader), max(0.001, timeout))
-                if sequence != self.expected_client_sequence:
-                    raise ProtocolError("protocolViolation", "Séquence non contiguë ou rejouée.")
-                self.expected_client_sequence += 1
-                await self.handle(kind, session_id, payload)
+                self.frames_seen += 1
+                await self.handle(kind, session_id, sequence, payload)
         except asyncio.IncompleteReadError:
             pass
         except TimeoutError:
@@ -302,11 +301,11 @@ class RemoteScribeConnection:
             with contextlib.suppress(OSError, TimeoutError):
                 await asyncio.wait_for(self.writer.wait_closed(), 2)
 
-    async def handle(self, kind: str, session_id: uuid.UUID, payload: bytes) -> None:
+    async def handle(self, kind: str, session_id: uuid.UUID, sequence: int, payload: bytes) -> None:
         if kind != "audioChunk" and len(payload) > MAX_JSON_PAYLOAD:
             raise ProtocolError("protocolViolation", "Payload JSON trop volumineux.")
         if kind == "pair":
-            if self.paired or session_id != NO_SESSION or self.expected_client_sequence != 1:
+            if self.paired or session_id != NO_SESSION or self.frames_seen != 1:
                 raise ProtocolError("protocolViolation", "PAIR doit être le premier message, sans session.")
             await self.handle_pair(payload)
             return
@@ -315,7 +314,7 @@ class RemoteScribeConnection:
         if kind == "startSession":
             await self.handle_start(session_id, payload)
         elif kind == "audioChunk":
-            await self.handle_audio(session_id, payload)
+            await self.handle_audio(session_id, sequence, payload)
         elif kind == "stopSession":
             await self.handle_stop(session_id, payload)
         elif kind == "ping":
@@ -378,8 +377,10 @@ class RemoteScribeConnection:
             raise ProtocolError("sessionLimit", "Durée maximale dépassée.")
         return self.session
 
-    async def handle_audio(self, session_id: uuid.UUID, payload: bytes) -> None:
+    async def handle_audio(self, session_id: uuid.UUID, sequence: int, payload: bytes) -> None:
         session = self.active_session(session_id)
+        if sequence != session.frames_received:
+            raise ProtocolError("protocolViolation", "Séquence audio non contiguë ou rejouée.")
         if not payload or len(payload) % 2:
             raise ProtocolError("unsupportedAudioFormat", "Chunk PCM invalide.")
         if session.bytes_received + len(payload) > self.server.config.max_audio_bytes:
@@ -391,8 +392,9 @@ class RemoteScribeConnection:
     async def handle_stop(self, session_id: uuid.UUID, payload: bytes) -> None:
         session = self.active_session(session_id)
         frames = _json_loads(payload).get("framesSent")
-        if type(frames) is not int or frames != session.frames_received or frames < 0:
-            raise ProtocolError("protocolViolation", "Nombre de chunks incohérent.")
+        # framesSent counts PCM sample frames (mono 16-bit), not chunks.
+        if type(frames) is not int or frames != session.bytes_received // 2:
+            raise ProtocolError("protocolViolation", "framesSent incohérent avec les échantillons reçus.")
         if not session.bytes_received:
             raise ProtocolError("emptyAudio", "La dictée ne contient aucun audio.")
         # No waiting queue of clinical payloads: excess work is refused promptly.
@@ -434,8 +436,8 @@ class RemoteScribeConnection:
             await self.send_json("error", NO_SESSION, {"code": code, "message": message})
 
     async def send_json(self, kind: str, session_id: uuid.UUID, value: dict[str, Any]) -> None:
-        self.writer.write(encode_frame(kind, session_id, self.sequence, _json_bytes(value)))
-        self.sequence += 1
+        # Server frames always carry sequence 0, like the shipped Swift server.
+        self.writer.write(encode_frame(kind, session_id, 0, _json_bytes(value)))
         await asyncio.wait_for(self.writer.drain(), 5)
 
 

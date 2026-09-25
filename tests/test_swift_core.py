@@ -52,7 +52,7 @@ class SwiftCoreTests(unittest.TestCase):
         main = Path(cls.temp.name) / "main.swift"
         main.write_text((ROOT / "tests/swift_core_regression.swift").read_text())
         cls.binary = Path(cls.temp.name) / "core-regression"
-        subprocess.run(["swiftc", *map(str, sorted((ROOT / "ios/Core/Sources").glob("*.swift"))), str(main), "-o", str(cls.binary)], check=True, capture_output=True, timeout=60)
+        subprocess.run(["swiftc", *map(str, sorted((ROOT / "ios/Core/Sources").glob("*.swift"))), str(main), "-o", str(cls.binary)], check=True, capture_output=True, timeout=300)
 
     @classmethod
     def tearDownClass(cls):
@@ -86,33 +86,28 @@ class SwiftCoreTests(unittest.TestCase):
                         kind, sid, seq, payload = receive(peer)
                         self.assertEqual((kind, sid, seq), (1, ZERO, 0))
                         self.assertEqual(json.loads(payload)["protocolVersion"], 1)
-                        outseq = 0
-                        send(peer, 1, ZERO, outseq, {"accepted": True, "serverName": "Fixture", "selectedBackend": "voxlocal", "protocolVersion": 1, "availableBackends": ["voxlocal"]})
-                        outseq += 1
-                        send(peer, 5, ZERO, outseq, {"state": "ready", "backend": "voxlocal", "bytesReceived": 0})
-                        outseq += 1
-                        expected = 1
+                        # The shipped server writes sequence 0 on every frame;
+                        # the client must ignore the field on server frames.
+                        send(peer, 1, ZERO, 0, {"accepted": True, "serverName": "Fixture", "selectedBackend": "voxlocal", "protocolVersion": 1, "availableBackends": ["voxlocal"]})
+                        send(peer, 5, ZERO, 0, {"state": "ready", "backend": "voxlocal", "bytesReceived": 0})
                         sessions = set()
                         for _ in range(2):
                             kind, sid, seq, payload = receive(peer)
-                            self.assertEqual((kind, seq), (2, expected))
+                            self.assertEqual((kind, seq), (2, 0))
                             self.assertNotIn(sid, sessions)
                             sessions.add(sid)
-                            expected += 1
-                            send(peer, 5, sid, outseq, {"state": "recording", "backend": "voxlocal", "bytesReceived": 0})
-                            outseq += 1
-                            for _ in range(20):
+                            send(peer, 5, sid, 0, {"state": "recording", "backend": "voxlocal", "bytesReceived": 0})
+                            # Audio chunks are numbered per session from 0, strictly
+                            # contiguous on the wire whatever the producer interleaving.
+                            for expected in range(20):
                                 kind, audio_sid, seq, payload = receive(peer)
                                 self.assertEqual((kind, audio_sid, seq, payload), (3, sid, expected, b"\x00\x00\x01\x00"))
-                                expected += 1
                             kind, stop_sid, seq, payload = receive(peer)
-                            self.assertEqual((kind, stop_sid, seq), (4, sid, expected))
-                            self.assertEqual(json.loads(payload)["framesSent"], 20)
-                            expected += 1
-                            send(peer, 5, sid, outseq, {"state": "processing", "backend": "voxlocal", "bytesReceived": 80})
-                            outseq += 1
-                            send(peer, 5, sid, outseq, {"state": "completed", "backend": "voxlocal", "bytesReceived": 80, "finalText": "test"})
-                            outseq += 1
+                            self.assertEqual((kind, stop_sid, seq), (4, sid, 0))
+                            # framesSent counts PCM samples: 20 chunks x 4 bytes / 2.
+                            self.assertEqual(json.loads(payload)["framesSent"], 40)
+                            send(peer, 5, sid, 0, {"state": "processing", "backend": "voxlocal", "bytesReceived": 80})
+                            send(peer, 5, sid, 0, {"state": "completed", "backend": "voxlocal", "bytesReceived": 80, "finalText": "test"})
                 except BaseException as exc:
                     failures.put(exc)
 
