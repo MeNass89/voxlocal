@@ -152,7 +152,6 @@ class ActiveSession:
     pcm: bytearray = field(default_factory=bytearray)
     bytes_received: int = 0
     frames_received: int = 0
-    last_sequence: int = 0
 
 
 class ClientSession:
@@ -161,7 +160,6 @@ class ClientSession:
         self.writer = writer
         self.host = host
         self.decoder = FrameDecoder()
-        self.sequence = 0
         self.paired = False
         self.device_id: str | None = None
         self.device_name: str | None = None
@@ -178,9 +176,8 @@ class ClientSession:
         await self.writer.drain()
 
     async def send_json(self, kind: MessageKind, session_id: uuid.UUID, payload: dict[str, Any]) -> None:
-        frame = encode_json_frame(kind, session_id, self.sequence, payload)
-        self.sequence += 1
-        await self.send(frame)
+        # Shipped Core contract: server frames always carry sequence 0.
+        await self.send(encode_json_frame(kind, session_id, 0, payload))
 
     async def send_error(self, code: str, message: str) -> None:
         # Error text is intentionally generic: it must not expose paths,
@@ -222,8 +219,7 @@ class ClientSession:
             if frame.kind is MessageKind.STOP_SESSION:
                 return await self.handle_stop(frame)
             if frame.kind is MessageKind.PING:
-                await self.send(encode_frame(MessageKind.PING, frame.session_id, self.sequence, frame.payload))
-                self.sequence += 1
+                await self.send(encode_frame(MessageKind.PING, frame.session_id, 0, frame.payload))
                 return True
             await self.send_error("protocolViolation", "Unexpected message")
             return False
@@ -232,11 +228,14 @@ class ClientSession:
             return False
 
     async def handle_pair(self, frame: Frame) -> bool:
+        # PAIR must be the first frame: any earlier frame already closed the
+        # connection as notPaired, so only a second PAIR remains to refuse.
+        # The sequence field is only meaningful on audio chunks and is ignored.
+        if self.paired:
+            await self.send_error("protocolViolation", "PAIR must be the first and only pairing frame")
+            return False
         if frame.session_id != NO_SESSION:
             await self.send_error("protocolViolation", "PAIR must use noSession")
-            return False
-        if frame.sequence != 0:
-            await self.send_error("protocolViolation", "PAIR must start at sequence zero")
             return False
         value = frame.json()
         if not isinstance(value, dict):
@@ -307,7 +306,7 @@ class ClientSession:
         if frame.session_id == NO_SESSION:
             await self.send_error("protocolViolation", "START_SESSION requires a session UUID")
             return False
-        self.active = ActiveSession(frame.session_id, backend, language, last_sequence=frame.sequence)
+        self.active = ActiveSession(frame.session_id, backend, language)
         await self.status("recording", message="Recording")
         return True
 
@@ -316,7 +315,8 @@ class ClientSession:
         if session is None or frame.session_id != session.session_id:
             await self.send_error("sessionMismatch", "No active session")
             return False
-        if frame.sequence != session.last_sequence + 1:
+        # Audio chunks are numbered per session from 0, strictly contiguous.
+        if frame.sequence != session.frames_received:
             await self.send_error("protocolViolation", "Sequence gap or replay")
             return False
         if len(frame.payload) % 2:
@@ -331,7 +331,6 @@ class ClientSession:
         session.pcm.extend(frame.payload)
         session.bytes_received += len(frame.payload)
         session.frames_received += 1
-        session.last_sequence = frame.sequence
         return True
 
     async def handle_stop(self, frame: Frame) -> bool:
@@ -339,19 +338,16 @@ class ClientSession:
         if session is None or frame.session_id != session.session_id:
             await self.send_error("noActiveSession", "No active session")
             return False
-        if frame.sequence != session.last_sequence + 1:
-            await self.send_error("protocolViolation", "Sequence gap or replay")
-            return False
         value = frame.json()
         if not isinstance(value, dict):
             await self.send_error("protocolViolation", "STOP_SESSION must be an object")
             return False
         frames_sent = value.get("framesSent")
         # ``bool`` is an ``int`` subclass in Python, but it is not a valid
-        # UInt64 Codable value for this field.  Enforce the wire contract so a
-        # client cannot claim a different chunk count at session close.
-        if isinstance(frames_sent, bool) or not isinstance(frames_sent, int) or frames_sent < 0 or frames_sent != session.frames_received:
-            await self.send_error("protocolViolation", "Chunk count does not match session")
+        # UInt64 Codable value for this field.  framesSent counts PCM sample
+        # frames (mono 16-bit, bytes / 2), exactly as the shipped Swift Core.
+        if isinstance(frames_sent, bool) or not isinstance(frames_sent, int) or frames_sent != session.bytes_received // 2:
+            await self.send_error("protocolViolation", "framesSent does not match received samples")
             return False
         await self.status("processing", message="Processing")
         pcm = bytes(session.pcm)

@@ -62,8 +62,10 @@ final class RemoteScribeClient {
     private let decoder = RemoteFrameDecoder()
     private var connection: NWConnection?
     private var generation: UInt64 = 0
-    private var sequence: UInt64 = 0
-    private var expectedServerSequence: UInt64 = 0
+    // Remote Scribe v1 (shipped Core): only AUDIO_CHUNK carries a meaningful
+    // sequence, numbered 0, 1, 2… per session. Every other frame carries 0.
+    private var audioSequence: UInt64 = 0
+    // Total PCM sample frames of the session (bytes / 2, mono 16-bit).
     private var framesSent: UInt64 = 0
     private var sessionID: UUID?
     private var paired = false
@@ -124,13 +126,11 @@ final class RemoteScribeClient {
         old?.cancel()
         resetSession()
         paired = false
-        sequence = 0
-        expectedServerSequence = 0
         pendingBytes = 0
         decoder.reset()
     }
 
-    private func resetSession() { sessionID = nil; framesSent = 0; stopped = false }
+    private func resetSession() { sessionID = nil; audioSequence = 0; framesSent = 0; stopped = false }
 
     // Abandon is local bookkeeping after a terminal server status. To cancel
     // a live recording, disconnect so the server also disposes of its session.
@@ -144,6 +144,7 @@ final class RemoteScribeClient {
             let id = UUID()
             try sendJSON(kind: .startSession, sessionID: id, value: StartSessionRequest(format: format, modeIdentifier: modeIdentifier, language: language, backend: backend))
             sessionID = id
+            audioSequence = 0
             framesSent = 0
             stopped = false
             return id
@@ -159,7 +160,7 @@ final class RemoteScribeClient {
             guard let sessionID, !stopped else { throw RemoteScribeError(code: "noActiveSession", message: "Aucune session distante n’est active.") }
             guard !data.isEmpty, data.count % 2 == 0 else { throw RemoteFrameError.invalidAudioChunk }
             try send(kind: .audioChunk, sessionID: sessionID, payload: data)
-            framesSent += 1
+            framesSent += UInt64(data.count / 2)
         }
     }
 
@@ -183,12 +184,13 @@ final class RemoteScribeClient {
 
     private func send(kind: RemoteMessageKind, sessionID: UUID, payload: Data) throws {
         guard let connection else { throw RemoteScribeError(code: "transport", message: "Connexion distante absente.") }
+        let sequence = kind == .audioChunk ? audioSequence : 0
         let data = try RemoteFrameEncoder.encode(RemoteFrame(kind: kind, sessionID: sessionID, sequence: sequence, payload: payload))
         guard pendingBytes + data.count <= maximumPendingBytes else {
             failLocked(code: "transport", message: "Le réseau ne transmet plus l’audio assez vite. La dictée a été interrompue.")
             throw RemoteScribeError(code: "transport", message: "File d’envoi audio saturée.")
         }
-        sequence += 1
+        if kind == .audioChunk { audioSequence += 1 }
         pendingBytes += data.count
         connection.send(content: data, completion: .contentProcessed { [weak self, weak connection] error in
             guard let self, let connection, self.connection === connection else { return }
@@ -202,11 +204,8 @@ final class RemoteScribeClient {
             guard let self, let connection, self.connection === connection else { return }
             if let data, !data.isEmpty {
                 do {
+                    // Server frames always carry sequence 0; the field is ignored.
                     for frame in try self.decoder.append(data) {
-                        guard frame.sequence == self.expectedServerSequence else {
-                            throw RemoteScribeError(code: "protocolViolation", message: "Séquence serveur non contiguë ou rejouée.")
-                        }
-                        self.expectedServerSequence &+= 1
                         try self.handle(frame)
                         if self.connection !== connection { return }
                     }
@@ -258,7 +257,6 @@ final class RemoteScribeClient {
         paired = false
         resetSession()
         pendingBytes = 0
-        expectedServerSequence = 0
         decoder.reset()
         deliver { $0.onError?(RemoteErrorPayload(code: code, message: message)) }
     }

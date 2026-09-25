@@ -42,6 +42,22 @@ import Testing
     #expect(states == [.ready, .recording, .processing, .completed])
 }
 
+@Test func stopWithWrongFramesSentIsRejected() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var replies: [RemoteFrame] = []
+    let handler = RemoteSessionHandler(backend: VoxLocalBackend(), serverName: "test", sessionsDirectory: root) { replies.append($0) }
+    handler.handle(try .json(kind: .pair, value: PairRequest(deviceID: "id", deviceName: "phone")))
+    let id = UUID()
+    handler.handle(try .json(kind: .startSession, sessionID: id, value: StartSessionRequest()))
+    handler.handle(RemoteFrame(kind: .audioChunk, sessionID: id, sequence: 0, payload: Data(repeating: 0, count: 320)))
+    handler.handle(try .json(kind: .stopSession, sessionID: id, value: StopSessionRequest(framesSent: 999)))
+    let errors = try replies.filter { $0.kind == .error }.map { try $0.decode(RemoteErrorPayload.self) }
+    #expect(errors.contains { $0.message.contains("framesSent") })
+    let states = try replies.filter { $0.kind == .sessionStatus }.map { try $0.decode(SessionStatusPayload.self).state }
+    #expect(!states.contains(.completed))
+}
+
 @Test func sessionCanSelectAnAdvertisedBackend() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

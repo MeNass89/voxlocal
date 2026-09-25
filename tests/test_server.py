@@ -65,9 +65,11 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((await read_frame(reader))[0], "sessionStatus")
         session = uuid.uuid4()
         start = {"format": {"sampleRate": 16000, "channels": 1, "bitsPerSample": 16, "codec": "pcm_s16le"}, "modeIdentifier": None, "language": "fr", "backend": "voxlocal"}
-        writer.write(encode_frame("startSession", session, 1, json.dumps(start).encode()))
-        writer.write(encode_frame("audioChunk", session, 2, b"\x00\x00" * 100))
-        writer.write(encode_frame("stopSession", session, 3, json.dumps({"framesSent": 1}).encode()))
+        # Shipped Core contract: only audio chunks are numbered (per session,
+        # from 0); framesSent counts PCM samples (200 bytes = 100 samples).
+        writer.write(encode_frame("startSession", session, 0, json.dumps(start).encode()))
+        writer.write(encode_frame("audioChunk", session, 0, b"\x00\x00" * 100))
+        writer.write(encode_frame("stopSession", session, 0, json.dumps({"framesSent": 100}).encode()))
         await writer.drain()
         states = []
         for _ in range(3):
@@ -79,6 +81,43 @@ class ServerTests(unittest.TestCase):
         await writer.wait_closed()
         server._server.close()
         await server._server.wait_closed()
+
+    def test_stop_with_wrong_frames_sent_is_rejected(self):
+        error = asyncio.run(self._session_error([(0, b"\x00\x00" * 100)], frames_sent=1))
+        self.assertEqual(error["code"], "protocolViolation")
+
+    def test_audio_sequence_must_be_contiguous(self):
+        error = asyncio.run(self._session_error([(1, b"\x00\x00" * 100)], frames_sent=100))
+        self.assertEqual(error["code"], "protocolViolation")
+
+    async def _session_error(self, chunks, frames_sent):
+        server = RemoteScribeServer(ServerConfig(host="127.0.0.1", port=0, pairing_code="123456", mock=True, insecure_test_only=True))
+        await server.start()
+        try:
+            sock = server._server.sockets[0].getsockname()
+            reader, writer = await asyncio.open_connection(sock[0], sock[1])
+            pair = {"protocolVersion": 1, "deviceID": "test-device", "deviceName": "pytest", "pairingCode": "123456"}
+            writer.write(encode_frame("pair", uuid.UUID(int=0), 0, json.dumps(pair).encode()))
+            session = uuid.uuid4()
+            start = {"format": {"sampleRate": 16000, "channels": 1, "bitsPerSample": 16, "codec": "pcm_s16le"}, "language": "fr", "backend": "voxlocal"}
+            writer.write(encode_frame("startSession", session, 0, json.dumps(start).encode()))
+            for sequence, pcm in chunks:
+                writer.write(encode_frame("audioChunk", session, sequence, pcm))
+            writer.write(encode_frame("stopSession", session, 0, json.dumps({"framesSent": frames_sent}).encode()))
+            await writer.drain()
+            states = []
+            while True:
+                kind, _, _, payload = await asyncio.wait_for(read_frame(reader), 2)
+                if kind == "error":
+                    # START was accepted: the error is about audio/STOP, not START.
+                    self.assertEqual(states, ["ready", "recording"])
+                    writer.close()
+                    return json.loads(payload)
+                if kind == "sessionStatus":
+                    states.append(json.loads(payload)["state"])
+        finally:
+            server._server.close()
+            await server._server.wait_closed()
 
 
 if __name__ == "__main__":
