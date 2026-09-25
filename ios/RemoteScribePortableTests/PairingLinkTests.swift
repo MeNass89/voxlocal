@@ -53,4 +53,11 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertNil(PairingLink(string: "remotescribe://pair?name=%20Poste&code=ABCD2345&fp=\(encodedFingerprint)"))
         XCTAssertNil(PairingLink(string: "remotescribe://pair?code=ABCD2345&fp=\(encodedFingerprint)"))
     }
+
+    func testPairingLinkNeverReplacesADifferentPin() {
+        let other = Data(repeating: 0x11, count: 32)
+        XCTAssertFalse(PortableClientModel.pinConflict(previous: nil, incoming: fingerprint))
+        XCTAssertFalse(PortableClientModel.pinConflict(previous: fingerprint, incoming: fingerprint))
+        XCTAssertTrue(PortableClientModel.pinConflict(previous: other, incoming: fingerprint))
+    }
 }

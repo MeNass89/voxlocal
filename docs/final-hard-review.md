@@ -38,8 +38,8 @@ Vérification : 5 tests Windows, 6 tests serveur et 2 tests Core Swift passent ;
 
 Preuves :
 
-- `ios/Core/Sources/RemoteClient.swift` accepte encore `tls: false` et, en TLS, s'en remet au trust store système ; aucun certificat épinglé ni certificat client mTLS n'est configuré. Le trust store géré reste une protection valable contre l'écoute lorsqu'il est correctement provisionné.
-- `server/voxlocal_server.py` exige désormais TLS pour un backend GPU et peut demander une CA client avec `--tls-client-ca`; le pinning/mTLS géré reste un durcissement de pilote à provisionner.
+- `ios/Core/Sources/RemoteClient.swift` accepte encore `tls: false`, mais `PortableClientModel` ne l'autorise que vers localhost (`isLoopbackHost`) et exige TLS pour tout poste découvert par Bonjour. En TLS, le client compare le SHA-256 du certificat feuille à l'empreinte épinglée dans le trousseau ; sans empreinte, il accepte un certificat reconnu par le trust store système et propose sinon une validation TOFU de l'empreinte. Aucun certificat client mTLS n'est configuré.
+- `server/voxlocal_server.py` exige désormais TLS pour un backend GPU et peut demander une CA client avec `--tls-client-ca`. Le pinning iOS est implémenté ; l'empreinte doit être provisionnée (lien QR) ou validée en TOFU, et le certificat client mTLS reste à provisionner.
 - `windows/remotescribe_host.py:416-418` est explicitement plaintext.
 
 Impact : toute connexion lancée en mode plaintext expose l'audio et les transcriptions et permet un faux serveur sur le VLAN. En TLS avec une CA gérée, la confidentialité et l'identité serveur sont assurées par le système ; l'absence de pinning et de certificat client réduit cependant la résistance à une CA compromise et ne correspond pas au profil mTLS précédemment décrit.

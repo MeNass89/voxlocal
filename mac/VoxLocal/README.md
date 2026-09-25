@@ -40,10 +40,10 @@ cd mac/VoxLocal
 ./run.sh
 ```
 
-Ou directement :
+Ou directement, depuis `mac/VoxLocal` :
 
 ```bash
-open mac/VoxLocal/dist/VoxLocal.app
+open dist/VoxLocal.app
 ```
 
 L’application reste utilisable sans modèles pour parcourir l’UI, gérer les modes et enregistrer. Après l’arrêt d’une dictée, le WAV est conservé dans l’historique et une erreur explique qu’aucun modèle Whisper n’est installé.

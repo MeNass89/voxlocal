@@ -60,7 +60,10 @@ class HostTests(unittest.TestCase):
         writer.write(encode_json_frame(MessageKind.PAIR, NO_SESSION, 0, {"protocolVersion": 1, "deviceID": "device", "deviceName": "pytest", "pairingCode": "123456"}))
         await writer.drain()
         while True:
-            frames = decoder.feed(await asyncio.wait_for(reader.read(4096), 2))
+            data = await asyncio.wait_for(reader.read(4096), 2)
+            if not data:
+                self.fail("host closed the connection before pairing completed")
+            frames = decoder.feed(data)
             if any(frame.kind is MessageKind.SESSION_STATUS and frame.json().get("state") == "ready" for frame in frames):
                 break
         session_id = uuid.uuid4()
@@ -72,7 +75,10 @@ class HostTests(unittest.TestCase):
         await writer.drain()
         states = []
         while True:
-            frames = decoder.feed(await asyncio.wait_for(reader.read(4096), 2))
+            data = await asyncio.wait_for(reader.read(4096), 2)
+            if not data:
+                self.fail(f"host closed the connection without an ERROR after {states}")
+            frames = decoder.feed(data)
             states.extend(frame.json().get("state") for frame in frames if frame.kind is MessageKind.SESSION_STATUS)
             if any(frame.kind is MessageKind.ERROR for frame in frames):
                 # START and the audio chunk were accepted; STOP is the rejected frame.

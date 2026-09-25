@@ -26,7 +26,7 @@ function Resolve-Python311 {
     $probe = 'import sys; print("%d.%d" % sys.version_info[:2]); print(sys.executable)'
     foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
-        $prefix = @(); if ([IO.Path]::GetFileName($candidate) -ieq 'py.exe') { $prefix = @('-3.11') }
+        $prefix = @(); if ([IO.Path]::GetFileName($candidate) -ieq 'py.exe') { $prefix = @('-3') }
         # Native stderr must not become a terminating error under Stop/StrictMode.
         $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
         try { $lines = @(& $candidate @prefix -c $probe 2>$null | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) }

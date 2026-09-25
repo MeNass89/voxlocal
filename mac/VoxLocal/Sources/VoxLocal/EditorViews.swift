@@ -233,8 +233,10 @@ struct SettingsView: View {
     private var iphoneSettings: some View {
         VStack(alignment: .leading, spacing: 26) {
             group("Réception des dictées") {
-                if state.remoteScribeEnabled {
+                if state.remoteScribeRunning {
                     Label("Prêt à recevoir depuis l’iPhone", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                } else if state.remoteScribeEnabled {
+                    Label(state.remoteScribeStatus, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 } else {
                     Label("Réception désactivée", systemImage: "pause.circle.fill").foregroundStyle(.orange)
                 }

@@ -67,9 +67,12 @@ final class VoxLocalLLMAdapter: LLMProcessingEngine {
             }
             return
         }
-        guard let mode, mode.kind != "verbatim",
-              let model = catalog.selected(catalog.scanLLM(), id: mode.model ?? current.selectedLlmModel) else {
+        guard let mode, mode.kind != "verbatim" else {
             completion(.success(LLMCompletion(text: transcription))); return
+        }
+        // A rewrite mode without a model must not look like a finished rewrite.
+        guard let model = catalog.selected(catalog.scanLLM(), id: mode.model ?? current.selectedLlmModel) else {
+            completion(.success(LLMCompletion(text: transcription, warning: "Aucun LLM compatible : transcription brute."))); return
         }
         queue.async {
             do {
@@ -156,7 +159,7 @@ final class VoxLocalRemoteBackend: RemoteScribeBackend {
                             try? self.history.save(completed)
                             DispatchQueue.main.async {
                                 self.onHistoryChanged?()
-                                let message: String
+                                var message: String
                                 if appSettings.autopasteEnabled {
                                     let paste = PlatformServices.paste(final, to: pasteTarget)
                                     message = paste.0
@@ -168,6 +171,7 @@ final class VoxLocalRemoteBackend: RemoteScribeBackend {
                                 } else {
                                     message = "Dictée distante traitée."
                                 }
+                                if let warning = output.warning { message = "\(warning) \(message)" }
                                 completion(.success(RemoteBackendResult(transcription: raw.text, finalText: final, resultLocation: completed.audio, message: message)))
                             }
                         }
@@ -194,11 +198,13 @@ final class VoxLocalRemoteServerController {
     /// Fired when the pairing code or the TLS fingerprint changes.
     var onSecurityChanged: (() -> Void)?
     var onPeersChanged: (([String]) -> Void)?
+    /// Fired whenever the listener actually starts or stops.
+    var onRunningChanged: ((Bool) -> Void)?
     private let backend: VoxLocalRemoteBackend
     private let superwhisperBackend: SuperwhisperRemoteBackend?
     private let paths: AppPaths
     private var server: RemoteScribeServer?
-    private(set) var running = false
+    private(set) var running = false { didSet { if running != oldValue { onRunningChanged?(running) } } }
     private(set) var defaultBackend: RemoteBackendKind
     private var tlsIdentity: RemoteScribeTLSIdentity?
     /// Dashless wire value; the UI shows `pairingCodeDisplay` and copies this one.
@@ -220,6 +226,15 @@ final class VoxLocalRemoteServerController {
         func encode(_ value: String) -> String { value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value }
         return "remotescribe://pair?name=\(encode(name))&code=\(encode(code))&fp=\(encode(fingerprintBase64))"
     }
+    /// Bonjour instance names and `PairingLink` names are limited to 63 UTF-8
+    /// bytes; truncate on a character boundary so the listener, the TLS identity
+    /// and the QR link all carry the same name.
+    static func boundedServiceName(_ name: String) -> String {
+        var bounded = name
+        while bounded.utf8.count > 63 { bounded.removeLast() }
+        bounded = bounded.trimmingCharacters(in: .whitespaces)
+        return bounded.isEmpty ? "Mac" : bounded
+    }
     /// Preview renders use a throwaway code and never read or write the Keychain.
     private let ephemeralPairingCode: Bool
     private var tlsDirectory: URL { paths.root.appendingPathComponent("remote-scribe/tls", isDirectory: true) }
@@ -230,7 +245,7 @@ final class VoxLocalRemoteServerController {
 
     init(paths: AppPaths, modes: ModeRepository, history: HistoryRepository, settings: SettingsRepository, catalog: ModelCatalog, llmServer: LLMServerController? = nil, ephemeralPairingCode: Bool = false, serviceName: String = RemoteScribeServer.defaultServiceName) {
         self.paths = paths
-        self.serviceName = serviceName
+        self.serviceName = Self.boundedServiceName(serviceName)
         self.ephemeralPairingCode = ephemeralPairingCode
         backend = VoxLocalRemoteBackend(modes: modes, history: history, settings: settings, catalog: catalog, llmServer: llmServer)
         superwhisperBackend = SuperwhisperRemoteBackend.isInstalled
@@ -244,7 +259,7 @@ final class VoxLocalRemoteServerController {
 
     func start() {
         guard !running else { return }
-        loadPairingCode()
+        guard loadPairingCode() else { return }
         // Never fall back to a plaintext listener: without an identity the phone
         // could not verify this Mac, so the server stays off.
         if tlsIdentity == nil {
@@ -271,18 +286,38 @@ final class VoxLocalRemoteServerController {
     /// devices paired with the old code must pair again.
     func regeneratePairingCode() {
         let code = PlatformServices.generatePairingCode()
-        do { if !ephemeralPairingCode { try PlatformServices.setRemotePairingCode(code) } }
-        catch { onStatus?("\(error.localizedDescription) Le nouveau code reste valable jusqu’à la fermeture de VoxLocal.") }
+        var failure: String?
+        if !ephemeralPairingCode {
+            do { try PlatformServices.setRemotePairingCode(code) }
+            catch {
+                // The revoked code must not come back from the Keychain at the next launch.
+                if (try? PlatformServices.setRemotePairingCode(nil)) != nil {
+                    failure = "\(error.localizedDescription) Le nouveau code est temporaire jusqu’à ce que le trousseau fonctionne : il reste valable jusqu’à la fermeture de VoxLocal, puis un autre code sera créé."
+                } else {
+                    failure = "\(error.localizedDescription) Le nouveau code est temporaire jusqu’à ce que le trousseau fonctionne. Attention : l’ancien code sera de nouveau accepté au prochain lancement."
+                }
+            }
+        }
         pairingCode = code
         onSecurityChanged?()
         if running { stop(); start() }
+        // After the restart, whose status would otherwise hide the warning.
+        if let failure { onStatus?(failure) }
     }
 
-    private func loadPairingCode() {
-        guard pairingCode.isEmpty else { return }
+    /// False when the Keychain could not be read: the stored code is neither
+    /// replaced nor shown, and the server stays off.
+    private func loadPairingCode() -> Bool {
+        guard pairingCode.isEmpty else { return true }
+        let stored: String?
+        do { stored = ephemeralPairingCode ? nil : try PlatformServices.remotePairingCode() }
+        catch {
+            onStatus?("Remote Scribe arrêté : \(error.localizedDescription)")
+            return false
+        }
         if ephemeralPairingCode {
             pairingCode = PlatformServices.generatePairingCode()
-        } else if let stored = PlatformServices.remotePairingCode() {
+        } else if let stored {
             pairingCode = stored
         } else {
             pairingCode = PlatformServices.generatePairingCode()
@@ -290,6 +325,7 @@ final class VoxLocalRemoteServerController {
             catch { onStatus?("\(error.localizedDescription) Le code affiché reste valable jusqu’à la fermeture de VoxLocal.") }
         }
         onSecurityChanged?()
+        return true
     }
 
     func setDefaultBackend(_ backend: RemoteBackendKind) {

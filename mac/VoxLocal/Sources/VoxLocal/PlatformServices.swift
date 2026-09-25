@@ -44,13 +44,19 @@ enum PlatformServices {
     }
 
     /// Remote Scribe pairing code (dashless wire value), kept in the Keychain like the cloud token.
-    static func remotePairingCode() -> String? {
+    /// nil = no code stored (`errSecItemNotFound`). Throws on any other status, so a
+    /// locked or denied Keychain never leads the caller to replace the stored code.
+    static func remotePairingCode() throws -> String? {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: pairingCodeService, kSecAttrAccount as String: pairingCodeAccount,
             kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data,
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw VoxError.message("Lecture du code d’appairage impossible dans le trousseau macOS (OSStatus \(status)).")
+        }
+        guard let data = item as? Data,
               let code = String(data: data, encoding: .utf8), !code.isEmpty else { return nil }
         return code
     }

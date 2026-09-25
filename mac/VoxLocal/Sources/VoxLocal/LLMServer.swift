@@ -151,6 +151,20 @@ final class LLMServerController {
                 throw VoxError.message("llama-server s’est arrêté (code \(child.terminationStatus)) avant d’être prêt")
             }
             if await Self.isHealthy(base) {
+                // Race: stop() or a newer ensure() may have run while the probe was in
+                // flight; a stale launch must not publish its endpoint.
+                try abandonIfSuperseded(child, generation: current)
+                // freeLoopbackPort() releases the port before llama-server binds it, so
+                // another local process could have answered /health. Only hand the
+                // endpoint (and its API key) to a listener owned by our child.
+                let pid = child.processIdentifier
+                let owned = await Task.detached { Self.listenerOwned(by: pid, port: port) }.value
+                try abandonIfSuperseded(child, generation: current)
+                guard owned else {
+                    child.terminate()
+                    process = nil
+                    throw VoxError.message("le port de llama-server a été pris par un autre processus")
+                }
                 let ready = LLMServerEndpoint(baseURL: base, apiKey: apiKey)
                 endpoint = ready; configuration = wanted
                 return ready
@@ -159,6 +173,40 @@ final class LLMServerController {
         }
         stop()
         throw VoxError.message("llama-server n’a pas répondu à /health en \(Int(Self.startupTimeout)) s")
+    }
+
+    /// Throws and cleans up this child when it is no longer the launch in charge.
+    private func abandonIfSuperseded(_ child: Process, generation current: Int) throws {
+        guard generation == current, !Task.isCancelled, process === child, child.isRunning else {
+            if child.isRunning { child.terminate() }
+            if process === child { process = nil }
+            throw CancellationError()
+        }
+    }
+
+    /// True when `lsof` shows a TCP listener on `port` held by `pid` and named
+    /// `llama-server` (lsof truncates COMMAND to `llama-ser`). Blocking, bounded
+    /// to 2 s; a timeout or any lsof failure counts as "not owned".
+    nonisolated static func listenerOwned(by pid: pid_t, port: UInt16) -> Bool {
+        let lsof = Process()
+        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        lsof.arguments = ["-nP", "-a", "-p", String(pid), "-iTCP:\(port)", "-sTCP:LISTEN"]
+        let output = Pipe()
+        lsof.standardOutput = output
+        lsof.standardError = FileHandle.nullDevice
+        let finished = DispatchSemaphore(value: 0)
+        lsof.terminationHandler = { _ in finished.signal() }
+        do { try lsof.run() } catch { return false }
+        guard finished.wait(timeout: .now() + 2) == .success else {
+            lsof.terminate()
+            return false
+        }
+        guard lsof.terminationStatus == 0,
+              let text = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) else { return false }
+        return text.split(separator: "\n").dropFirst().contains { line in
+            let columns = line.split(separator: " ", omittingEmptySubsequences: true)
+            return columns.count > 1 && columns[0].hasPrefix("llama-ser") && columns[1] == Substring(String(pid))
+        }
     }
 
     private static func isHealthy(_ base: URL) async -> Bool {

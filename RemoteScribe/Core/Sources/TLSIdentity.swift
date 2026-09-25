@@ -112,10 +112,9 @@ extension RemoteScribeTLSIdentity {
         ], environment: [passphraseVariable: passphrase])
         let archive = try Data(contentsOf: archiveURL)
 
-        var options: [String: Any] = [kSecImportExportPassphrase as String: passphrase]
-        if #available(macOS 15.0, *) {
-            options[kSecImportToMemoryOnly as String] = true
-        }
+        // macOS 15 is the deployment floor, so the identity never lands in the login keychain.
+        let options: [String: Any] = [kSecImportExportPassphrase as String: passphrase,
+                                      kSecImportToMemoryOnly as String: true]
         var items: CFArray?
         let status = SecPKCS12Import(archive as CFData, options as CFDictionary, &items)
         guard status == errSecSuccess,
