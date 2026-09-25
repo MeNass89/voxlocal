@@ -3,22 +3,36 @@ import Network
 
 // Executed by test_swift_core.py against a socket fixture, and by
 // test_real_host_interop.py against the compiled RemoteScribeHost; no iOS SDK
-// needed. Modes: "plain", "reconnect" (fixture) and "realhost".
+// needed. Modes: "plain", "reconnect" (fixture), "realhost", and the TLS
+// fixture modes "tls-nopin" and "tls-pin:<base64 SHA-256 of the leaf DER>".
+// TLS trust refusals exit 3 (untrustedServer) or 4 (pinMismatch) after
+// printing "<code> <observed fingerprint base64>" on stdout.
 let client = RemoteScribeClient()
 let port = UInt16(CommandLine.arguments[1])!
-let reconnect = CommandLine.arguments[2] == "reconnect"
-let realHost = CommandLine.arguments[2] == "realhost"
+let mode = CommandLine.arguments[2]
+let reconnect = mode == "reconnect"
+let realHost = mode == "realhost"
+let tls = mode.hasPrefix("tls-")
+let pin: Data? = mode.hasPrefix("tls-pin:") ? Data(base64Encoded: String(mode.dropFirst("tls-pin:".count))) : nil
+if mode.hasPrefix("tls-pin:") && pin == nil { fputs("invalid pin\n", stderr); exit(1) }
 var reconnectDone = false
 var completed = 0
 var session: UUID?
+var observedIdentity: Data?
+var paired = false
 
 func fail(_ message: String) -> Never {
     fputs(message + "\n", stderr)
     exit(1)
 }
 func connect() {
-    do { try client.connect(host: "127.0.0.1", port: port, deviceID: "test", deviceName: "Swift regression", pairingCode: "test-code") }
+    do { try client.connect(host: "127.0.0.1", port: port, deviceID: "test", deviceName: "Swift regression", pairingCode: "test-code", tls: tls, pinnedFingerprint: pin) }
     catch { fail("connect: \(error)") }
+}
+client.onServerIdentity = { fingerprint in
+    // Delivered once per TLS connection, before any PAIR response.
+    guard tls, observedIdentity == nil, !paired else { fail("unexpected identity callback") }
+    observedIdentity = fingerprint
 }
 func start() {
     do { session = try client.startSession(language: "fr", backend: .voxLocal) }
@@ -26,6 +40,8 @@ func start() {
 }
 client.onPairResponse = { response in
     guard response.accepted else { fail("pair rejected") }
+    guard !tls || observedIdentity == pin else { fail("pair before a pinned identity") }
+    paired = true
     start()
 }
 client.onSessionStatus = { id, status in
@@ -60,6 +76,13 @@ client.onSessionStatus = { id, status in
     }
 }
 client.onError = { error in
+    if error.code == "untrustedServer" || error.code == "pinMismatch" {
+        guard tls, !paired, completed == 0 else { fail("trust error after pairing: \(error)") }
+        guard observedIdentity?.base64EncodedString() == error.message else { fail("identity callback does not match error: \(error)") }
+        guard (error.code == "untrustedServer") == (pin == nil) else { fail("wrong trust error: \(error)") }
+        print("\(error.code) \(error.message)")
+        exit(error.code == "untrustedServer" ? 3 : 4)
+    }
     guard error.code == "transport" else { fail("unexpected error: \(error)") }
     if reconnect && !reconnectDone {
         reconnectDone = true

@@ -52,6 +52,42 @@ struct PortableResult: Codable, Hashable, Identifiable {
     let rawText: String?
 }
 
+/// SHA-256 of a server's leaf certificate, shown as uppercase hex in groups of
+/// four ("AB12 CD34 …"), the same format VoxLocal displays on the Mac.
+struct ServerFingerprint: Hashable {
+    let data: Data
+
+    var groups: [String] {
+        let hex = data.map { String(format: "%02X", $0) }.joined()
+        return stride(from: 0, to: hex.count, by: 4).map { offset in
+            let start = hex.index(hex.startIndex, offsetBy: offset)
+            return String(hex[start..<hex.index(start, offsetBy: min(4, hex.count - offset))])
+        }
+    }
+
+    var display: String { groups.joined(separator: " ") }
+    var shortDisplay: String { groups.prefix(4).joined(separator: " ") }
+}
+
+/// A TLS server whose certificate is neither pinned nor trusted by the system.
+/// The user compares the fingerprint with the one shown on the server before
+/// pinning it (trust on first use).
+struct PendingTrust: Identifiable {
+    let key: String
+    let serverName: String
+    let fingerprint: Data
+    let reconnect: () -> Void
+
+    var id: String { key }
+    var display: String { ServerFingerprint(data: fingerprint).display }
+}
+
+/// The pin stored for the server the user last chose.
+struct PinnedServerIdentity: Equatable {
+    let key: String
+    let fingerprint: ServerFingerprint
+}
+
 @MainActor
 final class PortableClientModel: ObservableObject {
     @Published private(set) var servers: [DiscoveredRemoteScribeServer] = []
@@ -77,7 +113,8 @@ final class PortableClientModel: ObservableObject {
     @Published private(set) var historyPersistenceEnabled: Bool
     @Published private(set) var historyPurgePending: Bool
     @Published private(set) var connectedWithTLS: Bool?
-
+    @Published var pendingTrust: PendingTrust?
+    @Published private(set) var pinnedIdentity: PinnedServerIdentity?
 
     private let browser = RemoteScribeBrowser()
     private let client = RemoteScribeClient()
@@ -92,6 +129,11 @@ final class PortableClientModel: ObservableObject {
     private var connectedEndpoint: NWEndpoint?
     private var isPaired = false
     private var discoveryStarted = false
+    // Pin key of the server being connected: Bonjour service name, or host:port.
+    private var currentServerKey: String?
+    private var currentReconnect: (() -> Void)?
+    // Pins the Keychain refused to store; valid for this run only.
+    private var memoryPins: [String: Data] = [:]
 
     private enum Keys {
         static let backend = "portable.backend"
@@ -103,6 +145,7 @@ final class PortableClientModel: ObservableObject {
         static let useTLS = "portable.useTLS"
         static let persistHistory = "portable.persistHistory"
         static let purgePending = "portable.historyPurgePending"
+        static func pin(_ serverKey: String) -> String { "pin:" + serverKey }
     }
 
     var elapsedText: String {
@@ -147,6 +190,22 @@ final class PortableClientModel: ObservableObject {
         configureCallbacks()
     }
 
+    #if DEBUG
+    // Screenshot hook: `-VoxLocalDebugTrustSheet 1` shows the trust sheet with a
+    // synthetic fingerprint, without a server. Seeded once the window is on screen.
+    private func seedDebugTrustSheet() {
+        guard UserDefaults.standard.bool(forKey: "VoxLocalDebugTrustSheet") else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            let fingerprint = Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 37 &+ 11) })
+            self.serverName = "Poste-Radiologie.local"
+            self.phase = .failed
+            self.connectionMessage = "Identité du serveur à confirmer."
+            self.pendingTrust = PendingTrust(key: "Poste-Radiologie", serverName: "Poste-Radiologie.local", fingerprint: fingerprint, reconnect: {})
+        }
+    }
+    #endif
+
     func startDiscovery() {
         guard !discoveryStarted else { return }
         discoveryStarted = true
@@ -155,6 +214,9 @@ final class PortableClientModel: ObservableObject {
             connectionMessage = "Recherche sur le réseau local…"
         }
         browser.start()
+        #if DEBUG
+        seedDebugTrustSheet()
+        #endif
     }
 
     func connect(to server: DiscoveredRemoteScribeServer) {
@@ -166,16 +228,19 @@ final class PortableClientModel: ObservableObject {
             fail("TLS est requis pour un serveur découvert. Pour un test mock local, utilisez la connexion manuelle sur localhost.", connectionLost: true)
             return
         }
+        guard let pin = loadPin(for: server.name) else { return }
         savePairingCode()
         selectedServerID = server.id
         connectedEndpoint = server.endpoint
         serverName = server.name
+        currentServerKey = server.name
+        currentReconnect = { [weak self] in self?.connect(to: server) }
         if !server.availableBackends.isEmpty {
             availableBackends = server.availableBackends
             if !availableBackends.contains(selectedBackend) { selectedBackend = availableBackends[0] }
         }
         beginConnection {
-            client.connect(to: server.endpoint, deviceID: deviceID, deviceName: UIDevice.current.name, pairingCode: normalizedPairingCode, tls: useTLS)
+            client.connect(to: server.endpoint, deviceID: deviceID, deviceName: UIDevice.current.name, pairingCode: normalizedPairingCode, tls: useTLS, pinnedFingerprint: pin)
         }
     }
 
@@ -196,17 +261,93 @@ final class PortableClientModel: ObservableObject {
         }
         UserDefaults.standard.set(host, forKey: Keys.manualHost)
         UserDefaults.standard.set(manualPort, forKey: Keys.manualPort)
+        connectManual(host: host, port: port)
+    }
+
+    private func connectManual(host: String, port: UInt16) {
+        guard !isBusy, activeSessionID == nil, validatePairingCode() else { return }
+        let key = "\(host):\(port)"
+        guard let pin = loadPin(for: key) else { return }
         savePairingCode()
         selectedServerID = nil
         connectedEndpoint = nil
         serverName = host
+        currentServerKey = key
+        currentReconnect = { [weak self] in self?.connectManual(host: host, port: port) }
         beginConnection {
             do {
-                try client.connect(host: host, port: port, deviceID: deviceID, deviceName: UIDevice.current.name, pairingCode: normalizedPairingCode, tls: useTLS)
+                try client.connect(host: host, port: port, deviceID: deviceID, deviceName: UIDevice.current.name, pairingCode: normalizedPairingCode, tls: useTLS, pinnedFingerprint: pin)
             } catch {
                 fail(error.localizedDescription, connectionLost: true)
             }
         }
+    }
+
+    /// Stores the confirmed fingerprint for the pending server, then reconnects;
+    /// from now on only this certificate is accepted for that server.
+    func trustPendingServer() {
+        guard let trust = pendingTrust else { return }
+        pendingTrust = nil
+        do {
+            try SecurePairingStore.saveData(trust.fingerprint, account: Keys.pin(trust.key))
+            memoryPins[trust.key] = nil
+        } catch {
+            memoryPins[trust.key] = trust.fingerprint
+            storageMessage = "Empreinte du serveur conservée en mémoire uniquement : \(error.localizedDescription)"
+        }
+        refreshPinnedIdentity()
+        trust.reconnect()
+    }
+
+    /// Also called when the sheet is swiped away; a no-op once trust led to a reconnection.
+    func cancelPendingTrust() {
+        pendingTrust = nil
+        guard phase == .failed else { return }
+        connectionMessage = "Connexion annulée : identité du serveur non confirmée."
+    }
+
+    /// Deletes the pin; the next connection to this server asks for confirmation again.
+    func forgetServerIdentity(key: String) {
+        do {
+            try SecurePairingStore.deleteData(account: Keys.pin(key))
+        } catch {
+            storageMessage = "Empreinte non effacée du trousseau : \(error.localizedDescription)"
+            return
+        }
+        memoryPins[key] = nil
+        if key == currentServerKey && (isPaired || isBusy) { disconnect() }
+        refreshPinnedIdentity()
+    }
+
+    /// `nil` stops the connection: an unreadable pin must not degrade to a
+    /// first-use prompt. `.some(nil)` means no pin is stored for this server.
+    private func loadPin(for key: String) -> Data?? {
+        guard useTLS else { return .some(nil) }
+        if let pin = memoryPins[key] { return .some(pin) }
+        do {
+            return .some(try SecurePairingStore.loadData(account: Keys.pin(key)))
+        } catch {
+            fail("Empreinte du serveur illisible dans le trousseau : \(error.localizedDescription) Déverrouillez l’iPhone puis réessayez.", connectionLost: true)
+            return nil
+        }
+    }
+
+    private func refreshPinnedIdentity() {
+        guard let key = currentServerKey else { pinnedIdentity = nil; return }
+        let pin = memoryPins[key] ?? (try? SecurePairingStore.loadData(account: Keys.pin(key)) ?? nil)
+        pinnedIdentity = pin.map { PinnedServerIdentity(key: key, fingerprint: ServerFingerprint(data: $0)) }
+    }
+
+    private func requestTrust(fingerprintBase64: String) {
+        guard let key = currentServerKey, let reconnect = currentReconnect,
+              let fingerprint = Data(base64Encoded: fingerprintBase64), fingerprint.count == 32 else {
+            fail("Certificat du serveur non vérifiable.", connectionLost: true)
+            return
+        }
+        let name = serverName ?? key
+        fail("Identité du serveur à confirmer.", connectionLost: true)
+        errorText = nil
+        pendingTrust = PendingTrust(key: key, serverName: name, fingerprint: fingerprint, reconnect: reconnect)
     }
 
     func disconnect() {
@@ -220,6 +361,9 @@ final class PortableClientModel: ObservableObject {
         activeSessionID = nil
         connectedEndpoint = nil
         selectedServerID = nil
+        currentServerKey = nil
+        currentReconnect = nil
+        pinnedIdentity = nil
         phase = .searching
         serverName = nil
         connectionMessage = "Déconnecté. Recherche sur le réseau local…"
@@ -353,7 +497,15 @@ final class PortableClientModel: ObservableObject {
                 guard let self else { return }
                 let activePhase = [.connecting, .starting, .recording, .stopping, .processing, .ready, .completed].contains(self.phase)
                 guard activePhase, self.isPaired || self.phase == .connecting else { return }
-                self.fail(error.message, connectionLost: true)
+                switch error.code {
+                case RemoteErrorPayload.untrustedServerCode where self.phase == .connecting:
+                    self.requestTrust(fingerprintBase64: error.message)
+                case RemoteErrorPayload.pinMismatchCode:
+                    // The message carries the observed fingerprint; never show it as an error text.
+                    self.fail("L’identité du serveur a changé. Vérifiez le poste avant de réessayer.", connectionLost: true)
+                default:
+                    self.fail(error.message, connectionLost: true)
+                }
             }
         }
         audio.onError = { [weak self] error in
@@ -383,6 +535,8 @@ final class PortableClientModel: ObservableObject {
         client.disconnect()
         isPaired = false
         activeSessionID = nil
+        pendingTrust = nil
+        refreshPinnedIdentity()
         phase = .connecting
         errorText = nil
         connectionMessage = "Connexion et appairage…"

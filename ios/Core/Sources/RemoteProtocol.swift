@@ -86,6 +86,14 @@ struct RemoteErrorPayload: Codable, Equatable, Error, LocalizedError {
     let code: String
     let message: String
     var errorDescription: String? { message }
+
+    /// Client-side trust refusals raised during the TLS handshake. For both,
+    /// `message` is the base64 SHA-256 of the server's leaf certificate (DER).
+    /// No pin stored and the certificate is not trusted by the system: the user
+    /// must confirm the fingerprint (trust on first use).
+    static let untrustedServerCode = "untrustedServer"
+    /// The server presented a certificate other than the pinned one.
+    static let pinMismatchCode = "pinMismatch"
 }
 
 /// Client-facing alias retained for the API used by the original portable app.

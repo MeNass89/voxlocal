@@ -71,6 +71,9 @@ struct ContentView: View {
         .sheet(isPresented: $showingConnections) {
             ConnectionSheet(model: model)
         }
+        .sheet(item: $model.pendingTrust, onDismiss: model.cancelPendingTrust) { trust in
+            TrustServerSheet(trust: trust, onTrust: model.trustPendingServer, onCancel: model.cancelPendingTrust)
+        }
         .confirmationDialog(
             "Effacer l’historique ?",
             isPresented: $showingClearHistory,
@@ -500,6 +503,7 @@ private struct ResultCard: View {
 private struct ConnectionSheet: View {
     @ObservedObject var model: PortableClientModel
     @Environment(\.dismiss) private var dismiss
+    @State private var forgettingIdentity: PinnedServerIdentity?
 
     var body: some View {
         NavigationStack {
@@ -569,10 +573,35 @@ private struct ConnectionSheet: View {
                     Toggle("Activer TLS", isOn: $model.useTLS)
                         .disabled(model.isConnected || model.isBusy)
                     Text(model.useTLS
-                         ? "Le serveur doit présenter un certificat approuvé par l’iPhone."
+                         ? "À la première connexion, comparez l’empreinte du certificat avec celle affichée sur le poste. Un certificat approuvé par l’établissement est accepté directement."
                          : "Le mode TCP historique est réservé à un VLAN ou tunnel WireGuard contrôlé.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+
+                if let pinned = model.pinnedIdentity {
+                    Section {
+                        Label {
+                            Text("Identité épinglée · \(pinned.fingerprint.shortDisplay)")
+                                .font(.system(.footnote, design: .monospaced))
+                                .textSelection(.enabled)
+                        } icon: {
+                            Image(systemName: "lock.fill")
+                                .foregroundStyle(.green)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Identité du serveur épinglée")
+                        .accessibilityValue(pinned.fingerprint.shortDisplay)
+                        Button("Oublier ce serveur", role: .destructive) {
+                            forgettingIdentity = pinned
+                        }
+                        .frame(minHeight: 44)
+                        .accessibilityHint("Efface l’empreinte enregistrée ; la prochaine connexion demandera une nouvelle vérification")
+                    } header: {
+                        Text("Identité du serveur")
+                    } footer: {
+                        Text("Seul le certificat dont l’empreinte a été vérifiée est accepté pour ce serveur.")
+                    }
                 }
 
                 if model.isConnected {
@@ -594,6 +623,19 @@ private struct ConnectionSheet: View {
                 }
             }
             .presentationDetents([.medium, .large])
+            .confirmationDialog(
+                "Oublier ce serveur ?",
+                isPresented: Binding(get: { forgettingIdentity != nil }, set: { if !$0 { forgettingIdentity = nil } }),
+                titleVisibility: .visible,
+                presenting: forgettingIdentity
+            ) { pinned in
+                Button("Oublier l’identité", role: .destructive) {
+                    model.forgetServerIdentity(key: pinned.key)
+                }
+                Button("Annuler", role: .cancel) { }
+            } message: { _ in
+                Text("L’empreinte enregistrée sera effacée. À la prochaine connexion, vous devrez la comparer de nouveau avec celle affichée sur le poste.")
+            }
         }
     }
 
@@ -627,5 +669,107 @@ private struct ConnectionSheet: View {
     private func backendNames(_ backends: [RemoteBackendKind]) -> String {
         guard !backends.isEmpty else { return "Remote Scribe" }
         return backends.map(\.displayName).joined(separator: " · ")
+    }
+}
+
+/// Trust-on-first-use confirmation. The only moment the user can detect a
+/// server impersonation, so the fingerprint is large, monospaced and grouped
+/// exactly as VoxLocal shows it on the Mac.
+private struct TrustServerSheet: View {
+    let trust: PendingTrust
+    let onTrust: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                RemoteScribePalette.background
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Image(systemName: "lock.shield")
+                                .font(.system(size: 34, weight: .semibold))
+                                .foregroundStyle(RemoteScribePalette.warning)
+                                .accessibilityHidden(true)
+                            Text("Vérifier l’identité du serveur")
+                                .font(.title2.weight(.semibold))
+                                .foregroundStyle(RemoteScribePalette.primaryText)
+                                .accessibilityAddTraits(.isHeader)
+                            Text("Comparez cette empreinte avec celle affichée dans VoxLocal sur le poste. Ne validez pas si elles diffèrent.")
+                                .font(.body)
+                                .foregroundStyle(RemoteScribePalette.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label(trust.serverName, systemImage: "desktopcomputer")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(RemoteScribePalette.primaryText)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text("EMPREINTE TLS (SHA-256)")
+                                .font(.caption2.weight(.semibold))
+                                .tracking(1.1)
+                                .foregroundStyle(RemoteScribePalette.secondaryText)
+                            Text(fingerprintLines)
+                                .font(.system(.title3, design: .monospaced).weight(.medium))
+                                .foregroundStyle(RemoteScribePalette.primaryText)
+                                .lineSpacing(6)
+                                .lineLimit(4)
+                                .minimumScaleFactor(0.5)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityLabel("Empreinte TLS SHA-256")
+                                .accessibilityValue(Text(trust.display).speechSpellsOutCharacters())
+                        }
+                        .padding(18)
+                        .voxContentSurface(cornerRadius: 20)
+                        .accessibilityElement(children: .contain)
+
+                        VoxGlassControls {
+                            VStack(spacing: 12) {
+                                Button(action: onTrust) {
+                                    Text("Faire confiance et connecter")
+                                        .font(.headline.weight(.semibold))
+                                        .frame(maxWidth: .infinity)
+                                        .frame(minHeight: 44)
+                                        .contentShape(Rectangle())
+                                }
+                                .voxGlassProminentButton(tint: RemoteScribePalette.action)
+                                .accessibilityHint("Enregistre cette empreinte sur l’iPhone et relance la connexion")
+
+                                Button(action: onCancel) {
+                                    Text("Annuler")
+                                        .font(.headline)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(minHeight: 44)
+                                        .contentShape(Rectangle())
+                                }
+                                .voxGlassButton()
+                                .accessibilityHint("Ne se connecte pas à ce serveur")
+                            }
+                        }
+                    }
+                    .frame(maxWidth: 560, alignment: .leading)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 20)
+                    .frame(maxWidth: .infinity)
+                }
+                .scrollIndicators(.hidden)
+            }
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .preferredColorScheme(.dark)
+        .presentationDetents([.large])
+    }
+
+    /// Four groups of four hex digits per line, sixteen groups in total.
+    private var fingerprintLines: String {
+        let groups = ServerFingerprint(data: trust.fingerprint).groups
+        return stride(from: 0, to: groups.count, by: 4)
+            .map { groups[$0..<min($0 + 4, groups.count)].joined(separator: " ") }
+            .joined(separator: "\n")
     }
 }
