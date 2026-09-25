@@ -99,4 +99,4 @@ python3 cloud/runpod/benchmark.py --timeout 5 > benchmark.json
 
 Il envoie de l’audio synthétique et un texte fixe, puis produit latences et
 statuts sans imprimer de réponse du fournisseur. Le déploiement du Pod est décrit
-dans `docs/cloud-deployment.md`.
+dans [`docs/cloud-deployment.md`](cloud-deployment.md).

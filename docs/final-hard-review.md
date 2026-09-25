@@ -150,7 +150,7 @@ xcodebuild … -sdk iphonesimulator … test                    # 8 XCTest OK (R
 xcodebuild -quiet -project ios/RemoteScribePortable.xcodeproj -target RemoteScribePortable -configuration Debug -sdk iphoneos CODE_SIGNING_ALLOWED=NO build   # OK
 ```
 
-La CI GitHub Actions (run 36127942402, commit `ac5d15c`) exécute ces suites sur ubuntu, Windows et macOS : quatre jobs verts. Le test TLS réel sur un iPhone physique et dans un réseau hospitalier reste à faire.
+La CI GitHub Actions (run 36130936691, commit `766015b`) exécute ces suites sur ubuntu, Windows et macOS : quatre jobs verts. Le test TLS réel sur un iPhone physique et dans un réseau hospitalier reste à faire.
 
 ## Décision de mise en service
 

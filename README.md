@@ -100,12 +100,12 @@ xcodebuild -quiet -project ios/RemoteScribePortable.xcodeproj -target RemoteScri
 | Suite | Tests au 25 septembre 2026 |
 |---|---|
 | `windows/` | 5 |
-| `tests/` | 24 (16 hors macOS : les tests Swift se sautent eux-mêmes) |
+| `tests/` | 48 (40 hors macOS : les tests Swift, bash et POSIX se sautent eux-mêmes) |
 | `agent/` | 9 |
 | `RemoteScribe` (`swift test`) | 8 |
 | iOS XCTest (`RemoteScribePortableTests`, simulateur) | 8 |
 
-La CI GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) exécute ces suites sur ubuntu (Python 3.11 et 3.12), Windows (installateur réel, désinstallation, identité TLS) et macOS (Swift, build VoxLocal, suites Python dont l’interop contre `RemoteScribeHost`, build iOS non signé). Run 36127942402 sur le commit `ac5d15c` : quatre jobs verts. Les XCTest iOS tournent en local sur simulateur.
+La CI GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) exécute ces suites sur ubuntu (Python 3.11 et 3.12), Windows (installateur réel, désinstallation, identité TLS) et macOS (Swift, build VoxLocal, suites Python dont l’interop contre `RemoteScribeHost`, build iOS non signé). Run 36130936691 sur le commit `766015b` : quatre jobs verts. Les XCTest iOS tournent en local sur simulateur.
 
 ## Documentation
 

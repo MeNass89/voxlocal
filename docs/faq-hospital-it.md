@@ -140,7 +140,7 @@ Whisper choisi ; elle n’a pas été validée cliniquement.
 
 Oui, en option. Le poste envoie alors l’audio et le texte en HTTPS avec jeton à un
 endpoint compatible OpenAI. La conception RunPod livrée place Whisper et le LLM
-derrière une seule porte HTTPS authentifiée (voir `docs/cloud-deployment.md`) ;
+derrière une seule porte HTTPS authentifiée (voir [`docs/cloud-deployment.md`](cloud-deployment.md)) ;
 aucun Pod n’a encore été provisionné. Avant toute donnée patient, le fournisseur
 doit fournir un DPA, un engagement de zéro rétention, la région de traitement et
 la politique de journaux. Voir [Fournisseur GPU](security-whitepaper.md#fournisseur-gpu).

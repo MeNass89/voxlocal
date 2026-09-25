@@ -280,7 +280,7 @@ ont montré que l’iPhone ne pouvait pas dicter vers VoxLocal.app :
 - Vague produit : serveur LLM gardé chaud, runtimes arm64, téléchargement des
   modèles et écran d’appairage QR sur Mac (2.3.0) ; onboarding, appairage QR,
   retour de résultat et iPad sur iOS (1.3) ; image RunPod, porte HTTPS et banc
-  de mesure (voir `docs/cloud-deployment.md`) ; site produit.
+  de mesure (voir [`docs/cloud-deployment.md`](cloud-deployment.md)) ; site produit.
 - Revue CodeRabbit 1 (8 majeurs, 10 mineurs corrigés) : plancher macOS 15
   (`kSecImportToMemoryOnly` n’existe qu’à partir de macOS 15 ; avant, l’import
   PKCS#12 peut atterrir dans le trousseau `login`), refus d’un QR code qui
@@ -299,6 +299,6 @@ python3 -m unittest discover -s agent -p 'test_*.py' -v     # 9 OK
 xcodebuild -project ios/RemoteScribePortable.xcodeproj -scheme RemoteScribePortable -configuration Debug -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 18 Pro' -derivedDataPath /tmp/voxlocal-ios-docs CODE_SIGNING_ALLOWED=NO test   # 8 XCTest
 ```
 
-CI : run 36127942402 sur le commit `ac5d15c`, quatre jobs verts. La
+CI : run 36130936691 sur le commit `766015b`, quatre jobs verts. La
 documentation produit (README, livre blanc sécurité, pitch, FAQ IT, feuille de
 route, script de démo) a été réécrite sur ces faits.

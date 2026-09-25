@@ -41,4 +41,4 @@ durcie du client Core (`ios/Core/Sources`) ; `RemoteScribe/Core/Sources` est le
 Core livré, source de vérité du contrat wire ; `mac/VoxLocal/` est l’app macOS
 qui embarque ce Core ; `server/` est l’hôte Python de référence ; `agent/` est
 l’API loopback ; `cloud/runpod/` est le runtime GPU privé (déploiement :
-`docs/cloud-deployment.md`).
+[`docs/cloud-deployment.md`](cloud-deployment.md)).

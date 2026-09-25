@@ -15,13 +15,13 @@ Versions : VoxLocal.app 2.3.0 (build 5), Remote Scribe iOS 1.3 (build 4).
 | Mac | VoxLocal 2.3.0 : `swift build` passe ; `llama-server` gardé chaud, vérifié par `lsof` avant de recevoir sa clé, repli `llama-cli` ; runtimes arm64 natifs ; téléchargement des modèles vérifié par SHA-256 ; macOS 15 ou plus récent (`LSMinimumSystemVersion` 15.0) | Prêt à montrer ; DMG signé ad hoc |
 | iPhone/iPad | iOS 1.3 : onboarding, appairage QR, retour de résultat, iPad en deux colonnes ; 8 XCTest (`RemoteScribePortableTests`) verts sur simulateur ; build `iphoneos` non signé en CI | Signature Personal Team et test physique encore locaux |
 | Core Swift | `RemoteScribe` : `swift test`, 8 cas (contrat de séquence, `framesSent`, identité TLS, verrou d’appairage) | Prêt |
-| Hôte serveur Python | `tests/` : 24 tests (16 hors macOS) ; framing, TLS/mock, épinglage, quotas, backend GPU, runtime RunPod, régression du Core Swift | Prêt pour intégration contrôlée |
+| Hôte serveur Python | `tests/` : 48 tests (40 hors macOS) ; framing, TLS/mock, épinglage, quotas, backend GPU, runtime RunPod, régression du Core Swift | Prêt pour intégration contrôlée |
 | Windows | `windows/` : 5 tests ; installateur exécuté en CI sur `windows-latest` (installation, import de l’agent depuis la venv, désinstallation, identité TLS) | Prêt pour harnais et pilote synthétique ; pas encore sur un poste du parc |
 | API/CLI agent | `agent/` : 9 tests ; Bearer loopback, contrats JSON, limites, erreurs amont, timeouts | Prêt pour harness synthétique |
-| GPU privé | image RunPod, déploiement, porte HTTPS et banc de mesure décrits dans `docs/cloud-deployment.md` ; exercés localement | Aucun Pod provisionné, aucune mesure GPU |
+| GPU privé | image RunPod, déploiement, porte HTTPS et banc de mesure décrits dans [`docs/cloud-deployment.md`](cloud-deployment.md) ; exercés localement | Aucun Pod provisionné, aucune mesure GPU |
 | Documentation | [livre blanc sécurité](security-whitepaper.md), [FAQ IT](faq-hospital-it.md), [feuille de route](roadmap.md), [démo](demo-runbook.md) | Traçable |
 
-CI GitHub Actions : run 36127942402 sur le commit `ac5d15c`, quatre jobs verts
+CI GitHub Actions : run 36130936691 sur le commit `766015b`, quatre jobs verts
 (ubuntu Python 3.11 et 3.12 ; Windows : suites, installateur, désinstallation,
 identité TLS ; macOS : `swift test`, build VoxLocal, suites Python dont l’interop
 réelle, build iOS non signé). Les XCTest iOS tournent en local sur simulateur,

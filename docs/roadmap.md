@@ -12,7 +12,7 @@ ou au travail qui la porte. Les portes sont détaillées dans
 | Appairage par QR code, onboarding iPhone, iPad en deux colonnes | livré (iOS 1.3) | [`ios-stability.md`](ios-stability.md) |
 | Inférence locale sur Mac, serveur LLM gardé chaud, runtimes arm64 natifs | livré (VoxLocal 2.3.0) | [`mac-performance.md`](mac-performance.md) |
 | Hôte Python et installateur Windows | exécutés en CI sur `windows-latest` | [`windows-deployment.md`](windows-deployment.md) |
-| Image GPU privé RunPod, porte HTTPS, banc de mesure | conçus et exercés localement | `docs/cloud-deployment.md`, [`runpod-runtime.md`](runpod-runtime.md) |
+| Image GPU privé RunPod, porte HTTPS, banc de mesure | conçus et exercés localement | [`docs/cloud-deployment.md`](cloud-deployment.md), [`runpod-runtime.md`](runpod-runtime.md) |
 | API agent loopback | livrée | [`agent-api.md`](agent-api.md) |
 
 ## Ensuite — pour un pilote hospitalier

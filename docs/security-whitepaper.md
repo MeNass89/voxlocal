@@ -230,7 +230,7 @@ presse-papier local uniquement (pas de Handoff) avec une expiration de 2 minutes
 **Pod GPU (option).** Les journaux et le jeton du Pod vivent sur son volume
 persistant `/workspace` ; il faut vérifier sur le Pod réel qu’aucun audio ni
 texte n’y reste, puis supprimer le Pod et le volume en fin d’usage (voir
-`docs/cloud-deployment.md`).
+[`docs/cloud-deployment.md`](cloud-deployment.md)).
 
 ## Secrets
 
@@ -247,7 +247,7 @@ dans un journal ou un message d’erreur.
 | Code d’appairage et empreintes, iPhone | trousseau iOS, `ThisDeviceOnly` ; si le trousseau refuse, conservés en mémoire pour la session et l’app le signale | [`SecurePairingStore.swift`](../ios/RemoteScribePortable/SecurePairingStore.swift) |
 | Hôte CLI Swift `RemoteScribeHost` | en TLS, le code vient de `--pairing-code-file` (fichier `0600` exigé) ou de `REMOTESCRIBE_PAIRING_CODE` ; `--pairing-code` en argument n’est accepté qu’avec `--insecure-plaintext` | [`main.swift`](../RemoteScribe/MacServer/Sources/main.swift) |
 | Hôte Python, API agent, Windows | variables d’environnement du service : `VOXLOCAL_PAIRING_CODE`, `VOXLOCAL_GPU_TOKEN`, `VOXLOCAL_LLM_TOKEN`, `VOXLOCAL_AGENT_TOKEN` ; les lanceurs Windows et le CLI agent refusent les secrets en argument | [`server/run-windows.ps1`](../server/run-windows.ps1), [`agent/run-windows.ps1`](../agent/run-windows.ps1), [`voxlocal_agent_api.py`](../agent/voxlocal_agent_api.py) |
-| Jeton du Pod GPU | secret RunPod écrit dans `/workspace/voxlocal/api-token` (`600`) ; jamais affiché, jamais copié sur le poste par les scripts | [`cloud/runpod/start-all.sh`](../cloud/runpod/start-all.sh), `docs/cloud-deployment.md` |
+| Jeton du Pod GPU | secret RunPod écrit dans `/workspace/voxlocal/api-token` (`600`) ; jamais affiché, jamais copié sur le poste par les scripts | [`cloud/runpod/start-all.sh`](../cloud/runpod/start-all.sh), [`docs/cloud-deployment.md`](cloud-deployment.md) |
 
 L’hôte Python accepte encore `--pairing-code` en argument pour compatibilité ;
 les procédures de ce dépôt utilisent toujours `VOXLOCAL_PAIRING_CODE`. Sous
@@ -282,7 +282,7 @@ texte dicté, jamais l’audio.
   pas dans un journal. Les erreurs du GPU cloud n’affichent que le code HTTP,
   jamais le corps renvoyé par le fournisseur
   ([`CloudGPU.swift`](../mac/VoxLocal/Sources/VoxLocal/CloudGPU.swift)).
-- **Pod GPU.** D’après la conception livrée (voir `docs/cloud-deployment.md`),
+- **Pod GPU.** D’après la conception livrée (voir [`docs/cloud-deployment.md`](cloud-deployment.md)),
   la porte HTTPS n’a pas de journal d’accès ; Whisper journalise la durée, la
   langue et le nom du fichier envoyé (`audio.wav`), jamais le texte.
 
@@ -314,7 +314,7 @@ exige le jeton Bearer. Aucun endpoint, modèle, région ou engagement ZDR n’es
 écrit dans le dépôt ([`cloud/runpod/README.md`](../cloud/runpod/README.md),
 [`agent-runtime-plan.md`](agent-runtime-plan.md), [`runpod-runtime.md`](runpod-runtime.md)).
 Le déploiement en une commande, le certificat du Pod et la grille de coûts sont
-décrits dans `docs/cloud-deployment.md`. **Aucun Pod n’a encore été
+décrits dans [`docs/cloud-deployment.md`](cloud-deployment.md). **Aucun Pod n’a encore été
 provisionné** : aucune mesure GPU réelle n’existe à ce jour.
 
 **Ce que le fournisseur doit prouver avant toute donnée patient.**
