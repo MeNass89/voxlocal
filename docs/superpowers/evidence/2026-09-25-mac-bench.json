@@ -1,0 +1,71 @@
+{
+  "date": "2026-09-25",
+  "script": "scripts/bench-mac-inference.sh",
+  "machine": {
+    "chip": "Apple M2",
+    "logical_cpus": 8,
+    "memory_gb": 16,
+    "macos": "27.0",
+    "load_average_at_end": [
+      2.57,
+      3.49,
+      13.86
+    ]
+  },
+  "runtimes": {
+    "dir": "mac/VoxLocal/Vendor/bin",
+    "build": "Metal + GGML_NATIVE=ON, arm64"
+  },
+  "models": {
+    "whisper": {
+      "file": "ggml-tiny.bin",
+      "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
+    },
+    "llm": {
+      "file": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db"
+    }
+  },
+  "audio": {
+    "seconds": 19.8,
+    "format": "WAV 16 kHz mono s16le",
+    "voice": "say -v Thomas"
+  },
+  "runs_per_stage": 3,
+  "flags": {
+    "whisper": "-l fr -fa -t 8 -bs 5 -oj -np",
+    "llama_cli": "-c 4096 -n 2048 --temp 0 --single-turn --no-display-prompt --no-show-timings --log-disable",
+    "llama_server": "--host 127.0.0.1 -ngl 99 -fa on -c 4096 --no-webui --log-disable"
+  },
+  "p50_seconds": {
+    "whisper_transcription": 0.657,
+    "llm_medical_cold_llama_cli": 2.048,
+    "llm_medical_warm_llama_server": 1.203,
+    "llama_server_startup_once": 0.547
+  },
+  "runs_seconds": {
+    "whisper_transcription": [
+      0.657,
+      0.651,
+      0.681
+    ],
+    "llm_medical_cold_llama_cli": [
+      2.047,
+      2.048,
+      2.05
+    ],
+    "llm_medical_warm_llama_server": [
+      1.334,
+      1.185,
+      1.203
+    ]
+  },
+  "warm_speedup_llm": 1.7,
+  "real_time_factor_whisper": 0.033,
+  "transcript": "Douleur touristique apparu ce matin, sans irradiation, tension artérielle 14/8, fréquence cardiac 4/20 douce par minute, pas de dispner, pas de fièvre, électrocardiogramme sans sud-ecalage, antecedents d'hypertension traité, on surveille la trononnie nassisseur et on réévalue la douleur en fin de matinée.",
+  "outputs": {
+    "llama_cli": "Douleur touristique apparu ce matin, sans irradiation, tension artérielle 14/8, fréquence cardiac 4/20 douce par minute, pas de dispner, pas de fièvre, électrocardiogramme sans sud-ecalage, antecedents d'hypertension traité, on surveille la trononnie nassisseur et on réévalue la douleur en fin de matinée.",
+    "llama_server": "Douleur touristique apparu ce matin, sans irradiation, tension artérielle 14/8, fréquence cardiac 4/20 douce par minute, pas de dispner, pas de fièvre, électrocardiogramme sans sud-ecalage, antecedents d'hypertension traité, on surveille la trononnie nassisseur et on réévalue la douleur en fin de matinée."
+  },
+  "note": "Aucun modèle n'est installé sous ~/Library/Application Support/VoxLocal/models/ sur ce Mac : mesure faite avec les plus petits modèles, ggml-tiny.bin et qwen2.5-0.5b-instruct-q4_k_m.gguf, téléchargés dans /tmp depuis Hugging Face et non commités. La qualité de transcription de tiny n'est pas représentative. Les modèles recommandés (ggml-large-v3-turbo-q5_0, Qwen2.5-3B Q4_K_M) n'ont pas été mesurés ici : relancer ce script avec eux pour des chiffres de production."
+}

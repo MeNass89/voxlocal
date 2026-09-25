@@ -4,6 +4,18 @@ import Network
 public final class RemoteScribeServer {
     public var onEvent: ((String) -> Void)?
     public var onReady: ((UInt16) -> Void)?
+    /// Names of the devices currently connected and paired, delivered on the main queue.
+    public var onPeersChanged: (([String]) -> Void)?
+
+    /// `Host` exists only on macOS; the library also compiles for iOS, where a
+    /// server would advertise itself as a generic "Poste".
+    public static var defaultServiceName: String {
+        #if os(macOS)
+        return Host.current().localizedName ?? "Mac"
+        #else
+        return "Poste"
+        #endif
+    }
 
     private let backends: [RemoteBackendKind: RemoteScribeBackend]
     private let defaultBackend: RemoteBackendKind
@@ -16,7 +28,7 @@ public final class RemoteScribeServer {
     private var listener: NWListener?
     private var peers: [ObjectIdentifier: Peer] = [:]
 
-    public init(backend: RemoteScribeBackend, serviceName: String = Host.current().localizedName ?? "Mac", sessionsDirectory: URL, pairingCode: String? = nil, tlsIdentity: RemoteScribeTLSIdentity? = nil) {
+    public init(backend: RemoteScribeBackend, serviceName: String = RemoteScribeServer.defaultServiceName, sessionsDirectory: URL, pairingCode: String? = nil, tlsIdentity: RemoteScribeTLSIdentity? = nil) {
         self.backends = [backend.kind: backend]
         self.defaultBackend = backend.kind
         self.serviceName = serviceName
@@ -25,7 +37,7 @@ public final class RemoteScribeServer {
         self.tlsIdentity = tlsIdentity
     }
 
-    public init(backends: [RemoteScribeBackend], defaultBackend: RemoteBackendKind, serviceName: String = Host.current().localizedName ?? "Mac", sessionsDirectory: URL, pairingCode: String? = nil, tlsIdentity: RemoteScribeTLSIdentity? = nil) {
+    public init(backends: [RemoteScribeBackend], defaultBackend: RemoteBackendKind, serviceName: String = RemoteScribeServer.defaultServiceName, sessionsDirectory: URL, pairingCode: String? = nil, tlsIdentity: RemoteScribeTLSIdentity? = nil) {
         self.backends = Dictionary(uniqueKeysWithValues: backends.map { ($0.kind, $0) })
         self.defaultBackend = defaultBackend
         self.serviceName = serviceName
@@ -94,6 +106,7 @@ public final class RemoteScribeServer {
             self.listener = nil
             self.peers.values.forEach { $0.cancel() }
             self.peers.removeAll()
+            self.publishPeers()
         }
     }
 
@@ -109,7 +122,11 @@ public final class RemoteScribeServer {
             peer: Self.peerKey(connection.endpoint),
             queue: queue,
             event: { [weak self] in self?.event($0) },
-            disconnected: { [weak self] identifier in self?.peers.removeValue(forKey: identifier) }
+            paired: { [weak self] in self?.publishPeers() },
+            disconnected: { [weak self] identifier in
+                guard let self, self.peers.removeValue(forKey: identifier) != nil else { return }
+                self.publishPeers()
+            }
         )
         peers[peer.identifier] = peer
         peer.start()
@@ -125,6 +142,12 @@ public final class RemoteScribeServer {
     private func event(_ message: String) {
         DispatchQueue.main.async { [weak self] in self?.onEvent?(message) }
     }
+
+    /// Runs on `queue`, which owns `peers`.
+    private func publishPeers() {
+        let names = peers.values.compactMap(\.deviceName).sorted()
+        DispatchQueue.main.async { [weak self] in self?.onPeersChanged?(names) }
+    }
 }
 
 private final class Peer {
@@ -133,15 +156,21 @@ private final class Peer {
     private let decoder = RemoteFrameDecoder()
     private let queue: DispatchQueue
     private let event: (String) -> Void
+    private let paired: () -> Void
     private let disconnected: (ObjectIdentifier) -> Void
     private var handler: RemoteSessionHandler!
     private var didDisconnect = false
+    /// Name offered in the last pair request; it becomes `deviceName` only once
+    /// the handler answers with an accepted pair frame.
+    private var offeredName: String?
+    private(set) var deviceName: String?
 
-    init(connection: NWConnection, backends: [RemoteBackendKind: RemoteScribeBackend], defaultBackend: RemoteBackendKind, serverName: String, sessionsDirectory: URL, pairingCode: String?, pairingGate: RemotePairingGate, peer: String, queue: DispatchQueue, event: @escaping (String) -> Void, disconnected: @escaping (ObjectIdentifier) -> Void) {
+    init(connection: NWConnection, backends: [RemoteBackendKind: RemoteScribeBackend], defaultBackend: RemoteBackendKind, serverName: String, sessionsDirectory: URL, pairingCode: String?, pairingGate: RemotePairingGate, peer: String, queue: DispatchQueue, event: @escaping (String) -> Void, paired: @escaping () -> Void, disconnected: @escaping (ObjectIdentifier) -> Void) {
         self.connection = connection
         self.identifier = ObjectIdentifier(connection)
         self.queue = queue
         self.event = event
+        self.paired = paired
         self.disconnected = disconnected
         handler = RemoteSessionHandler(backends: backends, defaultBackend: defaultBackend, serverName: serverName, sessionsDirectory: sessionsDirectory, pairingCode: pairingCode, pairingGate: pairingGate, peer: peer) { [weak self] frame in
             self?.send(frame)
@@ -167,7 +196,12 @@ private final class Peer {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, complete, error in
             guard let self else { return }
             if let data, !data.isEmpty {
-                do { try self.decoder.append(data).forEach(self.handler.handle) }
+                do {
+                    for frame in try self.decoder.append(data) {
+                        if frame.kind == .pair { self.offeredName = (try? frame.decode(PairRequest.self))?.deviceName }
+                        self.handler.handle(frame)
+                    }
+                }
                 catch { self.event("Trame rejetée : \(error.localizedDescription)"); self.connection.cancel() }
             }
             if complete || error != nil { self.disconnect(); return }
@@ -176,6 +210,11 @@ private final class Peer {
     }
 
     private func send(_ frame: RemoteFrame) {
+        // The handler only emits a `.pair` frame after accepting the code.
+        if frame.kind == .pair, let name = offeredName, deviceName != name {
+            deviceName = name
+            paired()
+        }
         do {
             connection.send(content: try RemoteFrameEncoder.encode(frame), completion: .contentProcessed { [weak self] error in
                 if let error { self?.event("Envoi impossible : \(error.localizedDescription)") }
