@@ -12,8 +12,8 @@ Plan de la vague 3 : [`docs/superpowers/plans/2026-09-25-voxlocal-wave3-harness.
 |---|---|---|
 | Profil `scribe` + fournisseur GPU | [`profile/`](profile/README.md) | H1 fait |
 | Banc d’appel d’outils | [`bench/`](bench/README.md) | H1 fait |
-| Flux de dictée (`voxlocal-tools`, feeder) | `plugins/voxlocal-tools/`, `ingest/` | H2 |
-| Pont portail + mock enregistré (`portail-tools`) | `bridge/`, `plugins/portail-tools/` | H3 |
+| Flux de dictée (`voxlocal-tools`, feeder) | [`plugins/voxlocal-tools/`](plugins/voxlocal-tools), [`ingest/`](ingest) | H2 fait |
+| Pont portail + mock enregistré (`portail-tools`) | [`bridge/`](bridge), [`plugins/portail-tools/`](plugins/portail-tools) | H3 fait |
 | Feu vert, audit, persona | `plugins/scribe-approval/`, `plugins/scribe-persona/` | H4 |
 | Démo de bout en bout | — | H5 |
 | Lanceur Windows, CI | — | H6 |

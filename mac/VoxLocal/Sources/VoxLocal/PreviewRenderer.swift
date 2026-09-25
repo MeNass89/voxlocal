@@ -26,6 +26,8 @@ enum PreviewRenderer {
         state.showPermissionSetup = false
         settle()
         state.remotePeers = ["iPhone du poste 3"]
+        state.historyRepository.patientContext = "Patient fictif — chambre 12, entorse de cheville"
+        state.patientContext = state.historyRepository.patientContext
 
         let main = NSHostingView(rootView: MainView(state: state))
         state.selection = .history; state.selectedHistoryID = records.newest
@@ -102,6 +104,8 @@ enum PreviewRenderer {
         settings.selectedLlmModel = RecommendedModel.llm.fileName
         settings.activeModeId = "medical"
         settings.language = "fr"
+        // Shows the « Harness local » group enabled (ephemeral port, throwaway token).
+        settings.localApiEnabled = true
         try JSONStore.write(settings, to: paths.settings)
     }
 

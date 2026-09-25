@@ -78,7 +78,16 @@ final class ModeRepository {
 
 final class HistoryRepository {
     let directory: URL
+    private let contextLock = NSLock()
+    private var currentPatientContext: String?
     init(directory: URL) { self.directory = directory }
+
+    /// Patient context stamped on every dictation created from now on. Memory
+    /// only: a restart clears it, so a new shift never inherits the last patient.
+    var patientContext: String? {
+        get { contextLock.lock(); defer { contextLock.unlock() }; return currentPatientContext }
+        set { contextLock.lock(); currentPatientContext = newValue; contextLock.unlock() }
+    }
 
     func create(mode: Mode, stt: String?, llm: String?, target: ActiveTarget) throws -> DictationRecord {
         let day = String(ISO8601DateFormatter().string(from: Date()).prefix(10))
@@ -94,7 +103,8 @@ final class HistoryRepository {
             selectedSttModel: stt,
             selectedLlm: llm,
             targetApplication: target.name,
-            targetIdentifier: target.identifier
+            targetIdentifier: target.identifier,
+            patientContext: patientContext
         )
         try save(record)
         return record

@@ -46,6 +46,8 @@ struct AppSettings: Codable, Equatable {
     var cloudWhisperModel: String?
     var cloudLlmModel: String?
     var cloudApiToken: String?
+    /// Loopback API for the local agent harness; `nil` (older settings) means off.
+    var localApiEnabled: Bool?
 
     var usesCloud: Bool { computeLocation == "cloud" }
 }
@@ -73,6 +75,8 @@ struct DictationRecord: Codable, Identifiable, Hashable {
     var error: String?
     var targetApplication: String?
     var targetIdentifier: String?
+    /// Patient the clinician declared before dictating (loopback API), stamped at creation.
+    var patientContext: String?
     var updatedAt: String = ISO8601DateFormatter().string(from: Date())
 }
 

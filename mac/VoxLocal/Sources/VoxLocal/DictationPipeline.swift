@@ -73,7 +73,9 @@ final class DictationPipeline {
         if recorder.isRecording { _ = try? recorder.stop() }
     }
 
-    func reprocess(_ input: DictationRecord) {
+    /// `paste: false` (harness retranscription) leaves the clipboard and the
+    /// frontmost application untouched.
+    func reprocess(_ input: DictationRecord, paste: Bool = true) {
         guard status != .recording && status != .processing else { emit(.processing, current, "Un traitement est déjà en cours."); return }
         guard FileManager.default.fileExists(atPath: input.audio) else { emit(.error, input, "Le fichier audio de cette dictée est introuvable."); return }
         let settings = settingsRepository.load()
@@ -84,7 +86,7 @@ final class DictationPipeline {
         try? history.save(record)
         current = record; status = .processing; target = PlatformServices.captureTarget(); emit(.processing, record, nil)
         let savedTarget = target
-        workQueue.async { [weak self] in self?.process(record, target: savedTarget, rollback: input) }
+        workQueue.async { [weak self] in self?.process(record, target: savedTarget, rollback: input, paste: paste) }
     }
 
     func importAudio(_ source: URL) {
@@ -114,7 +116,7 @@ final class DictationPipeline {
         } catch { emit(.error, nil, error.localizedDescription) }
     }
 
-    private func process(_ input: DictationRecord, target: ActiveTarget, rollback: DictationRecord? = nil) {
+    private func process(_ input: DictationRecord, target: ActiveTarget, rollback: DictationRecord? = nil, paste: Bool = true) {
         var record = input
         do {
             let settings = settingsRepository.load()
@@ -157,7 +159,9 @@ final class DictationPipeline {
 
             record.processingStatus = warning == nil ? "completed" : "completed_with_warning"
             record.error = warning; try history.save(record)
-            if mode.kind != "prompt_corrector" && settings.autopasteEnabled {
+            if !paste {
+                // Harness retranscription: history only.
+            } else if mode.kind != "prompt_corrector" && settings.autopasteEnabled {
                 let result = PlatformServices.paste(record.finalTranscription, to: target)
                 if !result.0 { warning = result.1; record.processingStatus = "completed_with_warning"; record.error = warning; try history.save(record) }
             } else if settings.keepClipboardText { _ = PlatformServices.copy(record.finalTranscription) }

@@ -28,7 +28,7 @@ import uuid
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 
 SERVICE = "voxlocal-agent-api"
 API_VERSION = "1"
@@ -44,6 +44,9 @@ MIN_TIMEOUT = 1.0
 MAX_TIMEOUT = 300.0
 MAX_MODEL_NAME = 128
 DEFAULT_MAX_CONCURRENT = 4
+MAX_WAIT = 25.0
+MAX_PATIENT_CONTEXT = 512
+MAX_MOCK_DICTATIONS = 1000
 logger = logging.getLogger(SERVICE)
 
 
@@ -204,6 +207,116 @@ def _audio_from_request(handler: BaseHTTPRequestHandler, body: bytes) -> tuple[b
     raise APIError("unsupported_media_type", "Utilisez audio/wav, application/octet-stream ou application/json.", 415)
 
 
+DICTATION_FIELDS = ("id", "timestamp", "deviceName", "modeId", "rawTranscription", "finalTranscription",
+                    "processingStatus", "duration", "patientContext")
+
+
+class DictationSource(Protocol):
+    """Where the dictation routes read from.  Same record shape as the Mac
+    loopback API (`LocalAPI.swift`): never an audio path."""
+
+    def list_since(self, since: Optional[str], wait: float) -> list[dict[str, Any]]:
+        """Records after `since`, oldest first; blocks up to `wait` s while empty.
+        Raises APIError(since_not_found) for an unknown cursor."""
+
+    def get(self, dictation_id: str) -> Optional[dict[str, Any]]: ...
+
+    def patient_context(self) -> Optional[str]: ...
+
+    def set_patient_context(self, value: Optional[str]) -> None: ...
+
+
+class InMemoryDictationSource:
+    """Synthetic source for `--mock`: starts empty, filled by `POST /v1/dictations`.
+
+    The Windows host persists no dictation (ZDR), so there is no production
+    source here yet; a harness on Windows reads the Mac API or this mock.
+    """
+
+    def __init__(self, max_records: int = MAX_MOCK_DICTATIONS):
+        self._records: list[dict[str, Any]] = []
+        self._patient: Optional[str] = None
+        self._changed = threading.Condition()
+        self._counter = 0
+        self._max = max_records
+
+    def _after(self, since: Optional[str]) -> list[dict[str, Any]]:
+        if since is None:
+            return list(self._records)
+        for index, record in enumerate(self._records):
+            if record["id"] == since:
+                return self._records[index + 1:]
+        raise APIError("since_not_found", "Dictée « since » introuvable.", 404)
+
+    def list_since(self, since: Optional[str], wait: float) -> list[dict[str, Any]]:
+        deadline = time.monotonic() + max(0.0, min(wait, MAX_WAIT))
+        with self._changed:
+            while True:
+                found = self._after(since)
+                remaining = deadline - time.monotonic()
+                if found or remaining <= 0:
+                    return [dict(record) for record in found]
+                self._changed.wait(remaining)
+
+    def get(self, dictation_id: str) -> Optional[dict[str, Any]]:
+        with self._changed:
+            for record in self._records:
+                if record["id"] == dictation_id:
+                    return dict(record)
+        return None
+
+    def patient_context(self) -> Optional[str]:
+        with self._changed:
+            return self._patient
+
+    def set_patient_context(self, value: Optional[str]) -> None:
+        with self._changed:
+            self._patient = value
+
+    def add(self, obj: dict[str, Any]) -> dict[str, Any]:
+        allowed = {"finalTranscription", "rawTranscription", "duration", "deviceName", "modeId", "processingStatus"}
+        unknown = set(obj) - allowed
+        if unknown:
+            raise APIError("invalid_dictation", f"Champs inconnus : {', '.join(sorted(unknown))}.")
+        final = _text(obj.get("finalTranscription"), "finalTranscription")
+        raw = obj.get("rawTranscription", final)
+        raw = _text(raw, "rawTranscription") if raw != "" else ""
+        duration = obj.get("duration", 0.0)
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not 0 <= duration <= 24 * 3600:
+            raise APIError("invalid_dictation", "duration invalide (secondes).")
+        status = obj.get("processingStatus", "completed")
+        if status not in ("recording", "processing", "completed", "completed_with_warning", "error", "interrupted"):
+            raise APIError("invalid_dictation", "processingStatus invalide.")
+        device = _text(obj.get("deviceName", "Poste Windows (mock)"), "deviceName", 128)
+        mode = _text(obj.get("modeId", "medical"), "modeId", 128)
+        with self._changed:
+            if len(self._records) >= self._max:
+                raise APIError("mock_full", "Source mock pleine ; redémarrez le service.", 409)
+            self._counter += 1
+            record = {"id": f"mock-{self._counter:06d}-{secrets.token_hex(4)}",
+                      "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                      "deviceName": device, "modeId": mode, "rawTranscription": raw,
+                      "finalTranscription": final, "processingStatus": status,
+                      "duration": float(duration), "patientContext": self._patient}
+            self._records.append(record)
+            self._changed.notify_all()
+            return dict(record)
+
+
+def _patient_context_value(obj: dict[str, Any]) -> Optional[str]:
+    if "patientContext" not in obj:
+        raise APIError("invalid_json", 'JSON {"patientContext": "…" | null} requis.')
+    value = obj["patientContext"]
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise APIError("invalid_patient_context", "patientContext doit être une chaîne ou null.")
+    value = value.strip()
+    if len(value.encode("utf-8")) > MAX_PATIENT_CONTEXT or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise APIError("invalid_patient_context", "patientContext : une ligne de 512 octets maximum.")
+    return value or None
+
+
 class HTTPSJSONClient:
     def __init__(self, base_url: str, token: Optional[str], timeout: float = DEFAULT_TIMEOUT):
         self.base_url = _validate_https_url(base_url)
@@ -283,7 +396,8 @@ class VoiceProvider:
 class AgentService:
     def __init__(self, *, voice: VoiceProvider, llm: Optional[HTTPSJSONClient], llm_model: str,
                  chat_enabled: bool, auth_token: str, clean_llm: Optional[HTTPSJSONClient] = None,
-                 clean_model: Optional[str] = None, max_concurrent: int = DEFAULT_MAX_CONCURRENT):
+                 clean_model: Optional[str] = None, max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+                 dictations: Optional[DictationSource] = None):
         if not isinstance(auth_token, str) or not 16 <= len(auth_token) <= 256 or any(c in auth_token for c in "\r\n"):
             raise ValueError("Token local invalide (16 à 256 caractères).")
         if not 1 <= max_concurrent <= 16:
@@ -298,6 +412,12 @@ class AgentService:
         self.capacity = threading.BoundedSemaphore(max_concurrent)
         self.max_concurrent = max_concurrent
         self.requests = 0
+        self.dictations = dictations
+
+    def dictation_source(self) -> DictationSource:
+        if self.dictations is None:
+            raise APIError("capability_unavailable", "Aucune source de dictées : ce poste ne conserve aucune dictée (utilisez l'API du Mac ou --mock).", 503)
+        return self.dictations
 
     def authenticate(self, handler: BaseHTTPRequestHandler) -> None:
         value = handler.headers.get("Authorization", "")
@@ -366,7 +486,8 @@ class AgentService:
                 "voiceBackend": "mock" if self.voice.mock else ("https" if self.voice.client else None),
                 "cleanBackend": "https" if self.clean_llm else "offline-safe",
                 "llmBackend": "https" if self.llm else None,
-                "maxConcurrent": self.max_concurrent}
+                "maxConcurrent": self.max_concurrent,
+                "dictations": "mock" if isinstance(self.dictations, InMemoryDictationSource) else (None if self.dictations is None else "custom")}
 
 
 class AgentHTTPServer(ThreadingHTTPServer):
@@ -408,11 +529,38 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
                 data = self.server.service.capabilities()
             elif self.path == "/v1/status":
                 data = {"status": "ready", "requests": self.server.service.requests, **self.server.service.capabilities()}
+            elif self.path == "/v1/patient-context":
+                data = {"patientContext": self.server.service.dictation_source().patient_context()}
+            elif urllib.parse.urlsplit(self.path).path == "/v1/dictations":
+                data = {"dictations": self._list_dictations()}
+            elif self.path.startswith("/v1/dictations/") and "?" not in self.path and self.path.count("/") == 3:
+                dictation_id = urllib.parse.unquote(self.path.rsplit("/", 1)[1])
+                data = self.server.service.dictation_source().get(dictation_id)
+                if data is None:
+                    raise APIError("not_found", "Dictée introuvable.", 404)
             else:
                 raise APIError("not_found", "Endpoint inconnu.", 404)
             self._write(200, _response_ok(request_id, data), request_id)
         except APIError as exc:
             self._write(exc.status, _response_error(request_id, exc), request_id)
+
+    def _list_dictations(self) -> list[dict[str, Any]]:
+        # Long-polls never take a concurrency slot: a waiting harness must not
+        # starve transcription.  The socket timeout (30 s) exceeds MAX_WAIT.
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True)
+        if set(query) - {"since", "wait"} or any(len(v) != 1 for v in query.values()):
+            raise APIError("invalid_query", "Paramètres acceptés : since, wait.")
+        since = query.get("since", [""])[0] or None
+        wait = 0.0
+        if "wait" in query:
+            try:
+                wait = float(query["wait"][0])
+            except ValueError:
+                wait = -1.0
+            if not (wait >= 0 and wait == wait and wait != float("inf")):
+                raise APIError("invalid_wait", "wait doit être un nombre de secondes ≥ 0.")
+            wait = min(wait, MAX_WAIT)
+        return self.server.service.dictation_source().list_since(since, wait)
 
     def do_POST(self):
         request_id = uuid.uuid4().hex
@@ -422,7 +570,19 @@ class AgentRequestHandler(BaseHTTPRequestHandler):
             if length < 0 or length > MAX_BODY:
                 raise APIError("request_too_large", "Content-Length requis et limité.", 413)
             body = self.rfile.read(length)
-            data = self.server.service.call("POST", self.path, self, body, request_id)
+            if self.path == "/v1/patient-context":
+                source = self.server.service.dictation_source()
+                source.set_patient_context(_patient_context_value(_safe_json(body)))
+                data = {"patientContext": source.patient_context()}
+            elif self.path == "/v1/dictations":
+                # Synthetic injection exists only in mock mode: a real host never
+                # accepts dictation content from a client.
+                source = self.server.service.dictation_source()
+                if not isinstance(source, InMemoryDictationSource):
+                    raise APIError("mock_only", "L'injection de dictées est réservée au mode --mock.", 403)
+                data = source.add(_safe_json(body))
+            else:
+                data = self.server.service.call("POST", self.path, self, body, request_id)
             self._write(200, _response_ok(request_id, data), request_id)
         except (ValueError, OverflowError):
             self._write(400, _response_error(request_id, APIError("invalid_content_length", "Content-Length invalide.")), request_id)
@@ -485,7 +645,8 @@ def _build_service(args) -> AgentService:
     clean_model = args.clean_model or os.environ.get("VOXLOCAL_CLEAN_MODEL") or args.llm_model
     return AgentService(voice=voice, llm=llm, llm_model=args.llm_model, clean_llm=clean,
                         clean_model=clean_model, chat_enabled=args.enable_chat, auth_token=token,
-                        max_concurrent=args.max_concurrent)
+                        max_concurrent=args.max_concurrent,
+                        dictations=InMemoryDictationSource() if args.mock else None)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
