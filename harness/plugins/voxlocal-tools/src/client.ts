@@ -27,9 +27,14 @@ export interface ClientOptions {
 
 /** Error with the API's stable `error.code`, for callers and tests. */
 export class VoxLocalAPIError extends Error {
-  constructor(readonly code: string, message: string, readonly status: number) {
+  readonly code: string
+  readonly status: number
+  // No TypeScript parameter properties: dsh loads plugin sources with Node's strip-only mode.
+  constructor(code: string, message: string, status: number) {
     super(message)
     this.name = 'VoxLocalAPIError'
+    this.code = code
+    this.status = status
   }
 }
 
@@ -59,8 +64,10 @@ export function validateApiUrl(value: string): string {
 
 export class VoxLocalClient {
   private readonly base: string
+  private readonly options: ClientOptions
 
-  constructor(private readonly options: ClientOptions) {
+  constructor(options: ClientOptions) {
+    this.options = options
     this.base = validateApiUrl(options.apiUrl)
   }
 

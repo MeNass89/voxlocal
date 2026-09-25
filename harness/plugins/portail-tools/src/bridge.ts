@@ -17,8 +17,13 @@ export interface BridgeOptions {
 /** A JSON-RPC error from the bridge, with its HTTP-like status (403, 404, 409, 422…). */
 export class BridgeError extends Error {
   override name = 'BridgeError'
-  constructor(readonly code: number, message: string, readonly data?: unknown) {
+  readonly code: number
+  readonly data?: unknown
+  // No TypeScript parameter properties: dsh loads plugin sources with Node's strip-only mode.
+  constructor(code: number, message: string, data?: unknown) {
     super(message)
+    this.code = code
+    this.data = data
   }
 }
 
@@ -26,7 +31,9 @@ const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
 
 export class BridgeClient {
   private seq = 0
-  constructor(private readonly options: BridgeOptions) {
+  private readonly options: BridgeOptions
+  constructor(options: BridgeOptions) {
+    this.options = options
     const host = new URL(options.url).hostname
     if (!LOOPBACK.has(host)) throw new Error(`le pont portail doit être en boucle locale, reçu ${host}`)
   }
