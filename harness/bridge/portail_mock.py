@@ -278,6 +278,15 @@ class MockPortal:
         return BackupInfo(backup_id, bak["item"], bak["attr"], bak["original_text"],
                           bak["original_digest"], bak["current_digest"], bak["taken"])
 
+    def find_backup(self, item_id: str, attribute: str, current_digest: str) -> BackupInfo | None:
+        """Newest backup of this attribute whose edited text is `current_digest` (crash recovery)."""
+        with self._lock:
+            found = [b for b in self.backups.values() if b["item"] == item_id
+                     and b["attr"] == attribute and b["current_digest"] == current_digest]
+        if not found:
+            return None
+        return self.backup_info(max(found, key=lambda b: b["taken"])["backup_id"])
+
     def restore(self, backup_id: str) -> RestoreResult:
         with self._lock:
             info = self.backup_info(backup_id)

@@ -5,18 +5,28 @@ Run from the repository root: python3 -m unittest harness.tests.test_bridge -v
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
+import types
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
+from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 from harness.bridge import portail_bridge as pb
 from harness.bridge.interface import (
-    NARRATIVE_SECTIONS, DigestMismatch, EditRefused, NotFound, PortalBackend, PortalError, digest,
+    NARRATIVE_SECTIONS, DigestMismatch, EditRefused, NotFound, PortalBackend, PortalError,
+    VerificationFailed, digest,
 )
-from harness.bridge.portail_bridge import Bridge, DictationSource, Forbidden
+from harness.bridge.portail_bridge import (
+    ApiDictationSource, Bridge, ChainedDictationSource, DictationSource, Forbidden,
+    parse_patient_context,
+)
 from harness.bridge.portail_mock import FIXTURES, MockPortal
 
 P1, E1 = "pat-001", "enc-001-urg"
@@ -212,14 +222,48 @@ class BridgeDrafts(unittest.TestCase):
         with self.assertRaises(EditRefused):
             self.env.draft(quotes=[])
 
-    def test_quotes_are_unverified_without_a_dictation_source(self):
+    def test_without_a_dictation_source_every_draft_is_refused(self):
         env = Env(dictations=False)
         try:
-            d = env.draft()
-            self.assertFalse(d["quotes_verified"])
-            self.assertFalse(d["quotes"][0]["verified"])
+            writes = env.portal.write_count
+            with self.assertRaisesRegex(EditRefused, "aucune source de dictées : citations "
+                                                     "invérifiables"):
+                env.draft()
+            self.assertFalse((env.root / "drafts.jsonl").exists())
+            self.assertEqual(env.portal.write_count, writes)
         finally:
             env.close()
+
+    def test_real_mode_without_a_source_has_none_and_mock_keeps_the_fixtures(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(pb.dictations_from_env("real"))
+            self.assertIsInstance(pb.dictations_from_env("mock"), DictationSource)
+        with patch.dict(os.environ, {"VOXLOCAL_API_URL": "http://127.0.0.1:47367"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "VOXLOCAL_API_TOKEN"):
+                pb.dictations_from_env("real")
+        with patch.dict(os.environ, {"VOXLOCAL_API_URL": "http://127.0.0.1:47367",
+                                     "VOXLOCAL_API_TOKEN": "t" * 32,
+                                     "PORTAIL_DICTATION_DIR": str(FIXTURES)}, clear=True):
+            chained = pb.dictations_from_env("real")
+            self.assertIsInstance(chained, ChainedDictationSource)
+            self.assertEqual([type(s) for s in chained.sources],
+                             [DictationSource, ApiDictationSource])
+
+    def test_dictation_without_patient_or_encounter_is_forbidden(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            src = Path(tmp.name)
+            text = DictationSource(FIXTURES).get(DICT).text
+            for name, ctx in (("none", None), ("patient-only", {"patient_id": P1}),
+                              ("encounter-only", {"encounter_id": E1})):
+                (src / f"dictation-{name}.json").write_text(json.dumps(
+                    {"dictation_id": f"dict-{name}", "patient_context": ctx, "text": text}))
+            self.env.bridge.dictations = DictationSource(src)
+            for name in ("none", "patient-only", "encounter-only"):
+                with self.assertRaisesRegex(Forbidden, "ne déclare pas de patient/rencontre"):
+                    self.env.draft(quotes=[dict(QUOTE, dictation_id=f"dict-{name}")])
+        finally:
+            tmp.cleanup()
 
     def test_draft_on_another_patients_item_is_forbidden(self):
         with self.assertRaises(Forbidden):
@@ -379,6 +423,29 @@ class BridgeApprovalGate(unittest.TestCase):
         self.assertEqual(bridge.draft_get(d["draft_id"])["status"], "applied")
         self.assertTrue(bridge.apply(d["draft_id"])["replayed"])
 
+    def test_recovered_write_keeps_its_backup_and_can_be_restored(self):
+        original = self.env.portal.read_section(ITEM1, EXAM)
+        d = self.env.draft()
+        self.b.approve_draft(d["draft_id"], "dr.test")
+        first = self.b.apply(d["draft_id"])
+        # Crash after the write, before the "applied" journal line.
+        path = self.env.root / "drafts.jsonl"
+        path.write_text("\n".join(path.read_text().splitlines()[:-1]) + "\n")
+        bridge = self.env.reopen()
+        again = bridge.apply(d["draft_id"])
+        self.assertTrue(again["replayed"] and again["recovered"])
+        self.assertEqual(again["backup_id"], first["backup_id"])
+        for key in ("item_id", "attribute", "mode", "readback_digest", "version_after"):
+            self.assertEqual(again[key], first[key], key)
+        self.assertEqual(again["version_before"], d["base_version"])
+        line = self.env.audit()[-1]
+        self.assertEqual((line["event"], line["result"], line["recovered"], line["backup_id"]),
+                         ("apply", "ok", True, first["backup_id"]))
+        r = bridge.draft_restore(first["backup_id"])
+        bridge.approve_draft(r["draft_id"], "dr.test")
+        self.assertTrue(bridge.restore(first["backup_id"])["restored"])
+        self.assertEqual(self.env.portal.read_section(ITEM1, EXAM).digest, original.digest)
+
     def test_crash_before_the_write_fails_closed(self):
         d = self.env.draft()
         self.b.approve_draft(d["draft_id"], "dr.test")
@@ -409,6 +476,221 @@ class BridgeApprovalGate(unittest.TestCase):
         self.assertEqual(self.env.portal.read_section(ITEM1, EXAM).digest, original.digest)
         self.assertEqual(self.env.audit()[-1]["event"], "restore")
         self.assertTrue(self.b.restore(backup_id)["replayed"])
+
+
+class ForeignWriteBackend:
+    """A mock portal whose write lands on a text another client changed in between: the
+    read-back is the digest of that foreign text, not of the approved one."""
+
+    def __init__(self, portal: MockPortal):
+        self.portal, self.name = portal, "foreign"
+
+    def __getattr__(self, name):
+        return getattr(self.portal, name)
+
+    def apply(self, item_id, attribute, base_digest, new_text, mode, old=None):
+        res = self.portal.apply(item_id, attribute, base_digest, new_text, mode, old)
+        return replace(res, readback_digest=digest("texte écrit par un autre client"))
+
+
+class BridgeReadbackCheck(unittest.TestCase):
+    def setUp(self):
+        self.env = Env()
+
+    def tearDown(self):
+        self.env.close()
+
+    def test_a_readback_other_than_the_approved_text_fails_and_restores(self):
+        original = self.env.portal.read_section(ITEM1, EXAM)
+        bridge = Bridge(ForeignWriteBackend(self.env.portal), self.env.root / "drafts.jsonl",
+                        self.env.root / "audit.jsonl", DictationSource(FIXTURES),
+                        clock=self.env.clock)
+        d = bridge.draft_create(patient_id=P1, encounter_id=E1, item_id=ITEM1, attribute=EXAM,
+                                mode="append", new_text="Ottawa négatif.", rationale="examen",
+                                quotes=[QUOTE])
+        bridge.approve_draft(d["draft_id"], "dr.test")
+        with self.assertRaisesRegex(VerificationFailed, "relecture différente du texte approuvé"):
+            bridge.apply(d["draft_id"])
+        rec = bridge.draft_get(d["draft_id"])
+        self.assertEqual(rec["status"], "failed")
+        self.assertEqual(rec["error"], {"status": 409,
+                                        "message": "relecture différente du texte approuvé"})
+        self.assertEqual(self.env.portal.read_section(ITEM1, EXAM).digest, original.digest)
+        audit = self.env.audit()
+        self.assertEqual([(a["event"], a["result"]) for a in audit[-2:]],
+                         [("restore-after-mismatch", "ok"), ("apply", "error")])
+        self.assertEqual(audit[-1]["reason"], "final-readback-mismatch")
+        with self.assertRaises(Forbidden):  # the approval was spent: no second try
+            bridge.apply(d["draft_id"])
+
+
+class RealPortalAdapter(unittest.TestCase):
+    """`RealPortal` over a fake `portail.records` (the real portal is not reachable)."""
+
+    def make(self, live: str, landed_on: str):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        data = Path(tmp.name)
+        calls = {"restore": []}
+
+        class FakeRecord:
+            def read(self, item_id, attribute, version=0):
+                return live
+
+            def get_item(self, item_id, version=0):
+                return {"version": 7}
+
+            def append(self, item_id, attribute, text, commit=False):
+                backup = data / f"backup_{item_id[:8]}_{attribute}_20260925T120000.json"
+                backup.write_text(json.dumps({
+                    "item": item_id, "attr": attribute, "original_text": landed_on,
+                    "original_digest": digest(landed_on),
+                    "current_digest": digest(landed_on + "\n" + text),
+                    "taken": "20260925T120000"}))
+                return types.SimpleNamespace(
+                    old_length=len(landed_on), new_length=len(landed_on) + len(text) + 1,
+                    old_digest=digest(landed_on), new_digest=digest(landed_on + "\n" + text),
+                    version=8, verified=True, prefix_intact=True, backup=backup)
+
+            def restore(self, backup):
+                calls["restore"].append(Path(backup).name)
+                return True
+
+        portal = pb.RealPortal.__new__(pb.RealPortal)
+        portal._records = types.SimpleNamespace(DATA=data)
+        portal._rec = FakeRecord()
+        return portal, calls
+
+    def test_write_on_a_text_changed_after_the_check_is_restored_and_refused(self):
+        portal, calls = self.make(live="texte vérifié", landed_on="texte changé entre-temps")
+        with self.assertRaises(DigestMismatch) as cm:
+            portal.apply(ITEM1, EXAM, digest("texte vérifié"), "ajout", "append")
+        self.assertIn("sauvegarde restaurée", cm.exception.message)
+        self.assertEqual(cm.exception.data["live"], digest("texte changé entre-temps"))
+        self.assertEqual(calls["restore"], [cm.exception.data["backup_id"]])
+
+    def test_matching_write_goes_through_and_find_backup_sees_it(self):
+        portal, calls = self.make(live="texte vérifié", landed_on="texte vérifié")
+        res = portal.apply(ITEM1, EXAM, digest("texte vérifié"), "ajout", "append")
+        self.assertEqual(calls["restore"], [])
+        self.assertEqual(res.readback_digest, digest("texte vérifié\najout"))
+        found = portal.find_backup(ITEM1, EXAM, digest("texte vérifié\najout"))
+        self.assertEqual(found.backup_id, res.backup_id)
+        self.assertIsNone(portal.find_backup(ITEM1, EXAM, digest("autre")))
+
+
+# ============================================================================ VoxLocal API source
+class StubVoxLocalApi:
+    """`GET /v1/dictations/<id>` of the VoxLocal loopback API, with the Mac app's envelope."""
+
+    TOKEN = "voxlocal-api-token-" + "c" * 32
+
+    def __init__(self, records: dict[str, dict], fail_with: int | None = None):
+        stub = self
+        self.records, self.fail_with, self.seen_auth = records, fail_with, []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                stub.seen_auth.append(self.headers.get("Authorization"))
+                did = urllib.parse.unquote(self.path.rsplit("/", 1)[1])
+                if self.headers.get("Authorization") != f"Bearer {stub.TOKEN}":
+                    status, body = 401, {"ok": False, "error": {"code": "unauthorized"}}
+                elif stub.fail_with:
+                    status, body = stub.fail_with, {"ok": False, "error": {"code": "busy"}}
+                elif did not in stub.records:
+                    status, body = 404, {"ok": False, "error": {"code": "not_found"}}
+                else:
+                    status, body = 200, {"ok": True, "data": stub.records[did]}
+                raw = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def api_record(did: str, context, status: str = "completed") -> dict:
+    return {"id": did, "timestamp": "2026-09-25T10:00:00Z", "deviceName": "iPhone",
+            "modeId": "medical", "rawTranscription": "brut",
+            "finalTranscription": DictationSource(FIXTURES).get(DICT).text.replace(" ", "  "),
+            "processingStatus": status, "duration": 300.0, "patientContext": context}
+
+
+class ApiDictations(unittest.TestCase):
+    def setUp(self):
+        self.api = StubVoxLocalApi({
+            "vox-json": api_record("vox-json", json.dumps({"patient_id": P1, "encounter_id": E1})),
+            "vox-compact": api_record("vox-compact", f"patient={P1} rencontre={E1}"),
+            "vox-free": api_record("vox-free", "Patient fictif, box 4"),
+            "vox-null": api_record("vox-null", None),
+            "vox-busy": api_record("vox-busy", f"patient={P1} rencontre={E1}", "processing"),
+        })
+        self.env = Env()
+        self.env.bridge.dictations = ApiDictationSource(self.api.url, StubVoxLocalApi.TOKEN)
+
+    def tearDown(self):
+        self.api.close()
+        self.env.close()
+
+    def quote(self, did: str) -> list[dict]:
+        return [dict(QUOTE, dictation_id=did)]
+
+    def test_patient_context_forms(self):
+        self.assertEqual(parse_patient_context(json.dumps({"patient_id": P1, "encounter_id": E1})),
+                         (P1, E1))
+        self.assertEqual(parse_patient_context(f"patient={P1} rencontre={E1}"), (P1, E1))
+        for value in (None, "", "Patient fictif", f"patient={P1}", json.dumps({"patient_id": P1}),
+                      json.dumps([P1, E1]), f"patient={P1} rencontre={E1} extra"):
+            self.assertEqual(parse_patient_context(value), (None, None), value)
+
+    def test_drafts_quote_api_dictations_in_both_bound_forms(self):
+        for did in ("vox-json", "vox-compact"):
+            d = self.env.draft(quotes=self.quote(did))
+            self.assertTrue(d["quotes_verified"] and d["quotes"][0]["verified"])
+        self.assertEqual(set(self.api.seen_auth), {f"Bearer {StubVoxLocalApi.TOKEN}"})
+
+    def test_unbound_unknown_unfinished_or_unreachable_dictations_are_refused(self):
+        for did in ("vox-free", "vox-null"):
+            with self.assertRaisesRegex(Forbidden, "ne déclare pas de patient/rencontre"):
+                self.env.draft(quotes=self.quote(did))
+        with self.assertRaisesRegex(EditRefused, "inconnue"):
+            self.env.draft(quotes=self.quote("vox-absent"))
+        with self.assertRaisesRegex(EditRefused, "pas encore terminée"):
+            self.env.draft(quotes=self.quote("vox-busy"))
+        self.api.fail_with = 503
+        with self.assertRaises(PortalError) as cm:
+            self.env.draft(quotes=self.quote("vox-json"))
+        self.assertEqual(cm.exception.status, 503)
+        self.env.bridge.dictations = ApiDictationSource(self.api.url, "mauvais-jeton")
+        self.api.fail_with = None
+        with self.assertRaises(PortalError) as cm:
+            self.env.draft(quotes=self.quote("vox-json"))
+        self.assertEqual(cm.exception.status, 503)
+
+    def test_chained_directory_then_api(self):
+        self.env.bridge.dictations = ChainedDictationSource(
+            [DictationSource(FIXTURES), ApiDictationSource(self.api.url, StubVoxLocalApi.TOKEN)])
+        self.assertTrue(self.env.draft()["quotes_verified"])                       # fixture
+        self.assertTrue(self.env.draft(quotes=self.quote("vox-compact"))["quotes_verified"])
+
+    def test_loopback_only_and_token_required(self):
+        for url in ("http://10.0.0.8:47367", "https://api.example:47367",
+                    "http://user:pw@127.0.0.1:47367", "ftp://127.0.0.1"):
+            with self.assertRaises(ValueError, msg=url):
+                ApiDictationSource(url, StubVoxLocalApi.TOKEN)
+        with self.assertRaises(ValueError):
+            ApiDictationSource(self.api.url, "")
 
 
 # ============================================================================ HTTP / JSON-RPC
