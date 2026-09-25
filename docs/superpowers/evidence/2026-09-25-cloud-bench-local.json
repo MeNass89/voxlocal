@@ -1,0 +1,184 @@
+{
+  "benchmark": "voxlocal-runpod-synthetic-v2",
+  "client": {
+    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "python": "3.14.7"
+  },
+  "iterations": 3,
+  "note": "Local harness proof, not GPU numbers: Apple M2 16 GB, macOS 27.0, Metal. Path: benchmark.py -> Caddy 2.11.4 edge (TLS 1.3 self-signed, Bearer token, https://127.0.0.1:18443, --ca-file pins the edge cert) -> whisper-server 127.0.0.1:8001 (whisper.cpp 371b5a7 = v1.9.3, ggml-tiny.bin sha256 be07e048e1e5, -l fr) and llama-server 127.0.0.1:8003 (llama.cpp a298422, qwen2.5-0.5b-instruct-q4_0.gguf sha256 7671c0c304e6, -ngl 99 -fa on); all started by cloud/runpod/entrypoint.sh + start-all.sh. Whisper pads input to 30 s: the silent 250 ms clip triggers temperature fallbacks and is slower than the 10 s tone; transcript quality is not measured. Direct plain-HTTP loopback run gave the same latencies except voice /v1/models = 404 (whisper-server has no such route; the edge answers it). RunPod GPU figures pending an account.",
+  "ok": true,
+  "services": [
+    {
+      "name": "voice",
+      "ok": true,
+      "operations": [
+        {
+          "iterations": 1,
+          "latency_ms": {
+            "max": 6.42,
+            "mean": 6.42,
+            "min": 6.42,
+            "p50": 6.42,
+            "p95": 6.42
+          },
+          "ok_count": 1,
+          "operation": "models",
+          "samples": [
+            {
+              "http_status": 200,
+              "latency_ms": 6.42,
+              "status": "ok"
+            }
+          ]
+        },
+        {
+          "iterations": 3,
+          "latency_ms": {
+            "max": 1363.72,
+            "mean": 1345.62,
+            "min": 1316.92,
+            "p50": 1356.21,
+            "p95": 1363.72
+          },
+          "ok_count": 3,
+          "operation": "audio_transcriptions_250ms",
+          "samples": [
+            {
+              "http_status": 200,
+              "latency_ms": 1356.21,
+              "status": "ok"
+            },
+            {
+              "http_status": 200,
+              "latency_ms": 1316.92,
+              "status": "ok"
+            },
+            {
+              "http_status": 200,
+              "latency_ms": 1363.72,
+              "status": "ok"
+            }
+          ]
+        },
+        {
+          "iterations": 3,
+          "latency_ms": {
+            "max": 74.53,
+            "mean": 73.0,
+            "min": 71.69,
+            "p50": 72.79,
+            "p95": 74.53
+          },
+          "ok_count": 3,
+          "operation": "audio_transcriptions_10s",
+          "samples": [
+            {
+              "http_status": 200,
+              "latency_ms": 74.53,
+              "status": "ok"
+            },
+            {
+              "http_status": 200,
+              "latency_ms": 71.69,
+              "status": "ok"
+            },
+            {
+              "http_status": 200,
+              "latency_ms": 72.79,
+              "status": "ok"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "llm",
+      "ok": true,
+      "operations": [
+        {
+          "iterations": 1,
+          "latency_ms": {
+            "max": 1.84,
+            "mean": 1.84,
+            "min": 1.84,
+            "p50": 1.84,
+            "p95": 1.84
+          },
+          "ok_count": 1,
+          "operation": "models",
+          "samples": [
+            {
+              "http_status": 200,
+              "latency_ms": 1.84,
+              "status": "ok"
+            }
+          ]
+        },
+        {
+          "iterations": 3,
+          "latency_ms": {
+            "max": 664.73,
+            "mean": 610.69,
+            "min": 564.53,
+            "p50": 602.82,
+            "p95": 664.73
+          },
+          "ok_count": 3,
+          "operation": "chat_completions",
+          "samples": [
+            {
+              "completion_tokens": 63,
+              "http_status": 200,
+              "latency_ms": 602.82,
+              "status": "ok",
+              "tokens_per_second": 104.51
+            },
+            {
+              "completion_tokens": 63,
+              "http_status": 200,
+              "latency_ms": 564.53,
+              "status": "ok",
+              "tokens_per_second": 111.6
+            },
+            {
+              "completion_tokens": 63,
+              "http_status": 200,
+              "latency_ms": 664.73,
+              "status": "ok",
+              "tokens_per_second": 94.78
+            }
+          ],
+          "tokens_per_second": {
+            "max": 111.6,
+            "mean": 103.63,
+            "min": 94.78,
+            "p50": 104.51,
+            "p95": 111.6
+          }
+        }
+      ]
+    }
+  ],
+  "started_at": "2026-09-25T10:41:23Z",
+  "synthetic": {
+    "audio": [
+      {
+        "bytes": 8044,
+        "duration_ms": 250,
+        "format": "wav/pcm_s16le/mono/16000hz",
+        "id": "250ms",
+        "sha256": "59460d5690616336b990fc7b1629428e3bd825e422da84469d2c8c8ecfaff43b"
+      },
+      {
+        "bytes": 320044,
+        "duration_ms": 10000,
+        "format": "wav/pcm_s16le/mono/16000hz",
+        "id": "10s",
+        "sha256": "b390cb226c7d5c6f3eb4d124c9efa3227b471290ee16a4c0d50a1f8407ecf797"
+      }
+    ],
+    "max_tokens": 96,
+    "text_sha256": "56d11746bdc9e56364bf99f8a739b6ca0c19e8e0e28682a6c7314abc2597e29a"
+  },
+  "timeout_seconds": 30.0
+}
