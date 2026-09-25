@@ -1,28 +1,32 @@
 # Installer et tester le prototype
 
-L’export source complet est [`VoxLocal-Product-Source-2026-09-25.zip`](../VoxLocal-Product-Source-2026-09-25.zip)
-(SHA-256 `9b70a4a162dccd19bbac23b053a86ed8005be7e1a3b610e7add8b48f8c3c15af`).
-L’archive exclut les caches Xcode/SwiftPM, les données utilisateur Xcode, les sorties générées et les autres archives. Les empreintes de tous les artefacts sont dans
-[`RELEASE-CHECKSUMS-2026-09-25.txt`](../RELEASE-CHECKSUMS-2026-09-25.txt).
+Le dépôt est la seule source : les artefacts (DMG, `.ipa`, archives) ne sont pas
+versionnés et se reconstruisent à partir de lui. Versions actuelles :
+VoxLocal.app 2.3.0 (build 5), Remote Scribe iOS 1.3 (build 4).
 
 ## Mac
 
-`VoxLocal-Agent-2026-09-24.dmg` à la racine est le nouveau build macOS
-reconstruit depuis l’export complet et régénéré le 25 septembre après le
-durcissement du runtime Mac. Il contient l’application arm64 et les sources
-durcies de l’agent dans `Contents/Resources/Agent/`; son lanceur exige
-Python 3.11+ mais aucun token ni interpréteur n’est embarqué. Son SHA-256
-actuel est `d9400e33b7fc6acccfced009f898f2b4e79700da2e15259d1c3ef90dedfcf2c4`.
+VoxLocal exige macOS 15 ou plus récent sur Apple Silicon. Construire l’app et
+le DMG depuis le dépôt (détails dans [`mac-build.md`](mac-build.md)) :
 
-`VoxLocal.dmg` reste l’image macOS originale fournie avec le
-prototype (VoxLocal 2.0.0, binaire Intel x86_64, macOS 13+). Elle contient
-`VoxLocal.app` et peut être ouverte par double-clic, puis l’application glissée
-dans Applications. Sa signature actuelle est ad hoc : si Gatekeeper la bloque,
-utiliser clic droit → Ouvrir, puis **Ouvrir**, ou **Réglages Système →
-Confidentialité et sécurité → Ouvrir quand même**. Sur Apple Silicon, macOS peut
-demander Rosetta. Elle n’est pas le build durci. L’implémentation Python de
-l’agent est dans le nouveau DMG ; le serveur de compatibilité reste sous
-`server/voxlocal_server.py` et peut tourner sur macOS ou Windows.
+```bash
+git submodule update --init
+(cd mac/VoxLocal && ./build-runtimes.sh)
+./scripts/build-macos.sh
+codesign --verify --deep --strict /tmp/voxlocal-desktop-app/VoxLocal.app
+```
+
+Le DMG contient l’application arm64 et les sources de l’agent dans
+`Contents/Resources/Agent/` ; son lanceur exige Python 3.11 ou plus récent, et
+aucun token ni interpréteur n’est embarqué. La signature est ad hoc : si
+Gatekeeper bloque l’app, utiliser clic droit → Ouvrir, puis **Ouvrir**, ou
+**Réglages Système → Confidentialité et sécurité → Ouvrir quand même**.
+
+Au premier lancement, accorder Microphone et Accessibilité (pour coller le
+texte), puis installer les modèles depuis Réglages › Intelligence artificielle.
+L’écran **iPhone** affiche le QR code d’appairage, le code et l’empreinte TLS.
+Le serveur de compatibilité Python reste sous `server/voxlocal_server.py` et peut
+tourner sur macOS ou Windows.
 
 ## iPhone / iPad
 
@@ -56,7 +60,7 @@ physique :
 ```bash
 VOXLOCAL_IOS_DERIVED_DATA_PATH=/tmp/voxlocal-ios-derived \
 DESTINATION='platform=iOS,id=<IPHONE_UDID>' \
-TEAM_ID=TON_TEAM_ID ./scripts/build-ios.sh
+TEAM_ID=VOTRE_TEAM_ID ./scripts/build-ios.sh
 ```
 
 Le projet a été compilé sans signature avec Xcode 27.0. La machine voit
@@ -64,18 +68,24 @@ l’iPhone apparié (iPhone16,1) comme appareil apparié et le runtime Simulator
 iOS 27 est installé. La sélection de la Personal Team, l’activation du mode
 Développeur et la confiance sur l’iPhone restent des étapes Xcode locales.
 
-Le projet contient actuellement l'identifiant `com.voxlocal.remotescribe.portable`
-et laisse la Team vide pour que Xcode utilise ton compte. Ouvre **Signing &
-Capabilities**, choisis ta Team personnelle, ou lance
-`TEAM_ID=TON_TEAM_ID ./scripts/build-ios.sh`. Pour un test sur iPhone il
+Le projet contient l’identifiant `com.voxlocal.remotescribe.portable` et laisse
+la Team vide pour que Xcode utilise votre compte. Ouvrez **Signing &
+Capabilities** et choisissez votre Team personnelle, ou lancez
+`TEAM_ID=VOTRE_TEAM_ID ./scripts/build-ios.sh`. Pour un test sur iPhone, il
 faut seulement un appareil enregistré et le mode développeur ; pour TestFlight
-ou MDM il faut le compte Apple Developer de l'hôpital et son profil de
-distribution. Je n'ai besoin d'aucun certificat privé ou mot de passe : tu les
-gardes dans Xcode/Trousseau et tu ne me les envoies pas.
+ou MDM, il faut le compte Apple Developer de l’hôpital et son profil de
+distribution. Aucun certificat privé ni mot de passe n’a à quitter votre Xcode
+ou votre trousseau.
 
 Pour le mock TCP local, lancer le serveur avec `--mock --insecure-test-only` et
-désactiver TLS dans le panneau de connexion de l’app. Ce mode est réservé aux
-données synthétiques.
+désactiver TLS dans le panneau de connexion de l’app. L’app n’accepte le mode
+non chiffré que vers `localhost`, donc depuis le simulateur. Ce mode est réservé
+aux données synthétiques.
+
+Avec VoxLocal sur le Mac, scanner le QR code de l’écran **iPhone**, ou saisir
+l’adresse du Mac et le code, puis comparer l’empreinte affichée par l’iPhone à
+celle du Mac avant de faire confiance. Le parcours de démonstration est dans
+[`demo-runbook.md`](demo-runbook.md).
 
 ## GPU loué
 
@@ -117,12 +127,11 @@ donnée patient. Le code ne loue pas automatiquement une machine GPU.
 
 ## Paquet Windows
 
-Le paquet [`VoxLocal-Windows-Runtime-2026-09-25.zip`](../VoxLocal-Windows-Runtime-2026-09-25.zip)
-contient l’agent, le serveur TLS de référence et les scripts
-`windows/install-runtime.ps1` / `uninstall-runtime.ps1`. Son SHA-256 est
-`22792f90624e04d0eca5b7ff38adbe236c167c19d4157a69016a455093dbb123`. La
+Le runtime Windows s’installe depuis une copie du dépôt avec
+`windows/install-runtime.ps1` et se retire avec `uninstall-runtime.ps1`. La
 procédure et les limites sont dans [`windows-deployment.md`](windows-deployment.md) ;
-la validation PowerShell finale doit être effectuée sur Windows.
+la CI exécute l’installation et la désinstallation sur `windows-latest`, la
+validation sur un poste réel du parc reste à faire.
 
 ## CLI et API pour les agents
 

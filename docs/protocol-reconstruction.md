@@ -4,8 +4,7 @@ Ce document fixe le contrat observable entre le client portable, le serveur
 RemoteScribeCore livré avec VoxLocal et le serveur Windows de ce dépôt. Il a été
 reconstruit à partir du projet présent dans `PortableClient.zip`, des références
 Xcode et du binaire macOS contenu dans `VoxLocal.dmg` (VoxLocal 2.0.0,
-`RemoteScribeCore`, SHA-256 du binaire :
-`9ee77d4eb64f6dcc1192c5959f4e1cfc9c505834d04a6ebbb18e49d654e6196a`). Les
+`RemoteScribeCore` ; image d’origine fournie avec le prototype, hors dépôt). Les
 éléments marqués « déduit » viennent des chemins d'exécution du binaire et
 doivent être gardés comme hypothèses testables lors d'un test d'interopérabilité.
 

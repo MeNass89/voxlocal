@@ -24,8 +24,8 @@ sont des sous-modules git épinglés sur les instantanés vendorisés
 git submodule update --init
 ```
 
-`mac/VoxLocal/Vendor/bin/` (les exécutables `whisper-cli` et `llama-cli`) est
-ignoré par git. Le reconstruire nativement demande CMake :
+`mac/VoxLocal/Vendor/bin/` (les exécutables `whisper-cli`, `llama-cli` et
+`llama-server`) est ignoré par git. Le reconstruire nativement demande CMake :
 
 ```bash
 cd mac/VoxLocal
