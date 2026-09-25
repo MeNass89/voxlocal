@@ -24,21 +24,22 @@ function Resolve-Python311 {
     # Installed runtime keeps .venv beside src/, while source checkouts keep it beside agent/ or server/.
     $runtimeVenv = Join-Path (Split-Path -Parent $projectRoot) '.venv\Scripts\python.exe'
     if (Test-Path -LiteralPath $runtimeVenv -PathType Leaf) { $candidates += $runtimeVenv }
+    if ($env:pythonLocation) { $candidates += (Join-Path $env:pythonLocation 'python.exe') }
     foreach ($name in @('python', 'python3', 'py')) {
         $command = Get-Command $name -ErrorAction SilentlyContinue
-        if ($command) { $candidates += $command.Source }
+        if ($command -and $command.Source) { $candidates += $command.Source }
     }
-    foreach ($candidate in ($candidates | Select-Object -Unique)) {
-        try {
-            $exe = $candidate
-            $prefix = @()
-            if ([IO.Path]::GetFileName($candidate) -ieq 'py.exe') { $prefix = @('-3.11') }
-            $versionText = (& $exe @prefix -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null | Select-Object -First 1).Trim()
-            if ($LASTEXITCODE -eq 0 -and $versionText -match '^\d+\.\d+$' -and ([version]$versionText -ge [version]'3.11')) {
-                if ($prefix.Count -eq 0) { return $candidate }
-                return ((& $exe @prefix -c 'import sys; print(sys.executable)' 2>$null | Select-Object -First 1).Trim())
-            }
-        } catch { }
+    $probe = 'import sys; print("%d.%d" % sys.version_info[:2]); print(sys.executable)'
+    foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        $prefix = @(); if ([IO.Path]::GetFileName($candidate) -ieq 'py.exe') { $prefix = @('-3.11') }
+        # Native stderr must not become a terminating error under Stop/StrictMode.
+        $previous = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { $lines = @(& $candidate @prefix -c $probe 2>$null | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) }
+        catch { $lines = @() }
+        finally { $ErrorActionPreference = $previous }
+        if ($LASTEXITCODE -ne 0 -or $lines.Count -lt 2) { continue }
+        if ($lines[0] -match '^\d+\.\d+$' -and ([version]$lines[0] -ge [version]'3.11')) { return $lines[1] }
     }
     throw 'Python 3.11 or newer was not found. Install it for the machine or pass -PythonPath C:\Path\python.exe.'
 }

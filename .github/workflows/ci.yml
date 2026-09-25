@@ -91,7 +91,7 @@ jobs:
           # Run away from the checkout so `import agent` cannot resolve to the source tree.
           Set-Location $env:RUNNER_TEMP
           # No -RegisterScheduledTask: no task is registered; -MockTask only affects task registration.
-          pwsh -NoProfile -File "$env:GITHUB_WORKSPACE\windows\install-runtime.ps1" -InstallRoot $root -MockTask
+          pwsh -NoProfile -File "$env:GITHUB_WORKSPACE\windows\install-runtime.ps1" -InstallRoot $root -MockTask -PythonPath (Join-Path $env:pythonLocation 'python.exe')
           if ($LASTEXITCODE -ne 0) { throw "install-runtime.ps1 exited with $LASTEXITCODE" }
           $manifestPath = Join-Path $root 'windows-runtime.manifest.json'
           if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "manifest missing: $manifestPath" }
