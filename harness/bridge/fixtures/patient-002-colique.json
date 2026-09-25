@@ -1,0 +1,44 @@
+{
+  "synthetic": true,
+  "note": "Patient fictif. Aucune donnée réelle.",
+  "patient": {
+    "patient_id": "pat-002",
+    "ehr_id": "1f19a002-0000-4000-8000-000000000002",
+    "tpms": "TPMS-900002",
+    "display_name": "LEROY Camille",
+    "birth_date": "1981-11-03",
+    "sex": "F"
+  },
+  "fhir": {
+    "allergies": [
+      {"resourceType": "AllergyIntolerance", "code": {"text": "Iode (produits de contraste iodés)"}, "criticality": "low", "reaction": [{"manifestation": [{"text": "prurit"}]}]}
+    ],
+    "conditions": [
+      {"resourceType": "Condition", "code": {"text": "Lithiase urinaire (épisode en 2022)"}, "clinicalStatus": "resolved"}
+    ],
+    "medications": [
+      {"resourceType": "MedicationStatement", "medicationCodeableConcept": {"text": "Lévonorgestrel/éthinylestradiol 0,15 mg/0,03 mg"}, "dosage": [{"text": "1 comprimé par jour"}], "status": "active"}
+    ]
+  },
+  "items": [
+    {
+      "item_id": "1f19a002-aaaa-4000-8000-000000000201",
+      "source_id": "ERA_EHR",
+      "template_id": "out-patient-care-procedure",
+      "version": 2,
+      "contact": {"encounter_id": "enc-002-urg", "type": "urgences", "start": "2026-09-25T10:15:00+02:00"},
+      "domain": {"code": "URG", "text": "Service des urgences"},
+      "attributes": [
+        {"name": "current-affliction", "values": {"_value_1": [{"text": {"content": "Douleur lombaire gauche brutale depuis 3 h, irradiant vers la fosse iliaque gauche. Nausées.", "language": "fr"}}]}},
+        {"name": "main-problem-history", "values": {"_value_1": [{"text": {"content": "Premier épisode de colique néphrétique gauche en 2022, expulsion spontanée.", "language": "fr"}}]}},
+        {"name": "physical-exam-text", "values": {"_value_1": [{"text": {"content": "TA 138/85 mmHg, FC 96/min, T° 37,1 °C. Patiente agitée. Ébranlement lombaire gauche douloureux.", "language": "fr"}}]}},
+        {"name": "systematic-review-text", "values": {"_value_1": [{"text": {"content": "Pas de fièvre, pas de brûlures mictionnelles.", "language": "fr"}}]}},
+        {"name": "text-evolution", "values": {"_value_1": [{"text": {"content": "", "language": "fr"}}]}},
+        {"name": "text-conclusion", "values": {"_value_1": [{"text": {"content": "", "language": "fr"}}]}},
+        {"name": "disposition", "values": {"_value_1": [{"text": {"content": "", "language": "fr"}}]}},
+        {"name": "other-risk-text", "values": {"_value_1": [{"text": {"content": "Non-fumeuse.", "language": "fr"}}]}}
+      ]
+    }
+  ],
+  "suggestions": []
+}
