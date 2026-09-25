@@ -161,8 +161,10 @@ synthétiques. Voir [Agent et portail](security-whitepaper.md#agent-et-portail).
 Dans le chat web du harness, sur le poste (`127.0.0.1` uniquement). Quand l’agent
 veut appliquer un brouillon, le chat affiche le patient, la rencontre, la
 section, le diff exact et les citations. « Allow once » transmet l’accord au pont
-avec un jeton que le modèle n’a pas ; l’accord vaut pour ce brouillon, une fois,
-pendant 10 minutes. Si la section a changé entre-temps ou si le brouillon a été
+avec un jeton que le modèle n’a pas ; l’accord vaut pour ce brouillon, dans
+cette session du chat, une fois, pendant 10 minutes. Le pont n’accepte que des
+brouillons dont chaque citation se retrouve dans une dictée déclarant le même
+patient et la même rencontre ; sans source de dictées, il refuse tout brouillon. Si la section a changé entre-temps ou si le brouillon a été
 modifié, le pont refuse (409) et l’agent doit repartir d’un nouveau brouillon.
 « Reject » ou absence de réponse : rien n’est écrit.
 
@@ -172,8 +174,16 @@ Deux journaux, sur le poste : `harness/audit/approvals.jsonl` (chaque décision 
 médecin et son résultat, avec son nom) et `harness/audit/portal-writes.jsonl`
 (chaque écriture ou refus du pont, avec identifiant d’approbation et
 empreintes). Ils contiennent des identifiants et des empreintes, jamais le texte
-clinique. Les brouillons, eux, contiennent le texte proposé : leur rétention est
-à fixer avec votre DPO avant le portail réel.
+clinique ni les messages d’erreur ; un identifiant malformé proposé par le modèle
+n’y figure que sous forme d’empreinte. Les brouillons, eux, contiennent le texte
+proposé : leur rétention est à fixer avec votre DPO avant le portail réel.
+
+La livraison des dictées à l’agent est « au moins une fois » : si le transmetteur
+s’arrête pendant un envoi, il renvoie au redémarrage les dictées concernées,
+précédées de « Renvoi possible après interruption (même identifiant de dictée ;
+ignorer si déjà reçu) », et l’agent traite une dictée déjà reçue comme un renvoi,
+pas comme une nouvelle dictée. Une double écriture au dossier reste impossible :
+chaque écriture exige son propre feu vert.
 
 ### 19. Qu’est-ce qui manque avant un pilote avec des patients réels ?
 

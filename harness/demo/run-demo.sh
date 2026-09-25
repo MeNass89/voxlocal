@@ -15,6 +15,9 @@
 #   --seed-dictation FILE           synthetic dictation injected into the agent API in mock mode
 #                                   (default harness/bridge/fixtures/transcript_entorse.txt)
 #   --patient ID --encounter ID     patient declared before dictating (default pat-001 / enc-001-urg)
+#   --dictation-source api|file     how the bridge reads the delivered dictation to check quotes:
+#                                   api (default) GET /v1/dictations/<id> on the agent API;
+#                                   file = a dictation-<id>.json copy (fallback)
 #   --port N                        dsh web port (default 3081)
 #   --drive / --shots DIR           headless run of the 90-second script with screenshots
 #
@@ -28,7 +31,7 @@ PROFILE_DIR="$HARNESS_DIR/profile"
 
 CHECK=0 DRIVE=0 SHOTS="" PROVIDER=scripted WEB_PORT=3081
 SEED="$HARNESS_DIR/bridge/fixtures/transcript_entorse.txt"
-PATIENT=pat-001 ENCOUNTER=enc-001-urg
+PATIENT=pat-001 ENCOUNTER=enc-001-urg DICTATION_SOURCE=api
 AGENT_PORT=47366 BRIDGE_PORT=47368 LLM_PORT=47381
 LLAMA_SERVER="${LLAMA_SERVER:-/tmp/vox-w2-3-build/llama/bin/llama-server}"
 LOCAL_MODEL="${VOXLOCAL_LOCAL_MODEL:-/tmp/vox-models/qwen2.5-0.5b-instruct-q4_k_m.gguf}"
@@ -43,13 +46,42 @@ while [ $# -gt 0 ]; do
     --seed-dictation) SEED="$2"; shift ;;
     --patient) PATIENT="$2"; shift ;;
     --encounter) ENCOUNTER="$2"; shift ;;
+    --dictation-source) DICTATION_SOURCE="$2"; shift ;;
     --port) WEB_PORT="$2"; shift ;;
-    -h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "option inconnue : $1 (voir --help)" >&2; exit 2 ;;
   esac
   shift
 done
 case "$PROVIDER" in scripted|local|pod) ;; *) echo "--provider : scripted, local ou pod" >&2; exit 2 ;; esac
+case "$DICTATION_SOURCE" in api|file) ;; *) echo "--dictation-source : api ou file" >&2; exit 2 ;; esac
+
+# Same check as harness/run-web.sh (keep the two copies identical; harness/tests/test_launchers.py compares them).
+check_llm_url() {  # name value -> 0, or message on stderr and 2
+  local name="$1" url="$2" scheme rest authority host
+  case "$url" in *://*) ;; *) echo "$name must be an absolute http(s) URL without credentials: $url" >&2; return 2 ;; esac
+  scheme="$(printf '%s' "${url%%://*}" | tr '[:upper:]' '[:lower:]')"
+  rest="${url#*://}"
+  authority="${rest%%[/?#]*}"
+  case "$authority" in
+    *@*|'') echo "$name must be an absolute http(s) URL without credentials: $url" >&2; return 2 ;;
+  esac
+  case "$authority" in
+    \[*) host="${authority%%]*}]" ;;
+    *) host="${authority%%:*}" ;;
+  esac
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  case "$scheme" in
+    https) [ -n "$host" ] && return 0 ;;
+    http)
+      case "$host" in 127.0.0.1|localhost|'[::1]') return 0 ;; esac
+      echo "$name uses plaintext HTTP to a remote host; use https:// or 127.0.0.1: $url" >&2; return 2 ;;
+  esac
+  echo "$name must be an absolute http(s) URL without credentials: $url" >&2; return 2
+}
+if [ "$PROVIDER" = pod ] && [ -n "${VOXLOCAL_LLM_URL:-}" ]; then
+  check_llm_url VOXLOCAL_LLM_URL "$VOXLOCAL_LLM_URL" || exit 2
+fi
 [ "$DRIVE" = 0 ] || [ -n "$SHOTS" ] || SHOTS="$PWD/demo-shots"
 
 if [ -z "$HEADLESS_SHELL" ]; then
@@ -128,10 +160,12 @@ export SCRIBE_APPROVALS_AUDIT="$RUN/audit/approvals.jsonl"
 export DSH_TELEMETRY_MODE=DISABLED
 unset DEEPSEEK_API_KEY OPENAI_API_KEY
 
-wait_http() {  # url [auth-token] ; 30 s
+wait_http() {  # url [auth-token] ; 30 s. The token goes to curl on stdin (-K -), never in argv.
   local i
   for i in $(seq 1 60); do
-    if curl -fsS -o /dev/null ${2:+-H "Authorization: Bearer $2"} "$1" 2>/dev/null; then return 0; fi
+    if [ -n "${2:-}" ]; then
+      if printf 'header = "Authorization: Bearer %s"\n' "$2" | curl -fsS -o /dev/null -K - "$1" 2>/dev/null; then return 0; fi
+    elif curl -fsS -o /dev/null "$1" 2>/dev/null; then return 0; fi
     sleep 0.5
   done
   echo "pas de réponse de $1 (voir $RUN/logs)" >&2; return 1
@@ -153,7 +187,7 @@ open(sys.argv[2], "w", encoding="utf-8").write(re.sub(r"\s+", " ", " ".join(line
 PY
 VOXLOCAL_API_TOKEN="$VOXLOCAL_AGENT_TOKEN" python3 harness/ingest/dictation_feeder.py \
   --api-url "http://127.0.0.1:$AGENT_PORT" --state-file "$RUN/feeder/state.json" \
-  --once --backend dryrun --seed-file "$RUN/seed.txt" --patient-context "$PATIENT" \
+  --once --backend dryrun --seed-file "$RUN/seed.txt" --patient-context "patient=$PATIENT rencontre=$ENCOUNTER" \
   >"$RUN/logs/feeder.log" 2>&1
 DICTATION_ID="$(python3 - "$RUN/feeder/dryrun.jsonl" "$RUN/message.txt" <<'PY'
 import json, sys
@@ -165,9 +199,11 @@ print(line["dictationId"])
 PY
 )"
 
-# 3. The bridge checks every quote against the dictation it came from. Until the bridge reads the
-#    VoxLocal API directly, hand it this dictation (same text, patient and encounter binding).
-python3 - "$RUN/dictations" "$DICTATION_ID" "$RUN/seed.txt" "$PATIENT" "$ENCOUNTER" <<'PY'
+# 3. The bridge checks every quote against the dictation it came from. By default it reads that
+#    dictation from the agent API (GET /v1/dictations/<id>; patient and encounter from the declared
+#    « patient=… rencontre=… »). Fallback (--dictation-source file): hand it a copy.
+if [ "$DICTATION_SOURCE" = file ]; then
+  python3 - "$RUN/dictations" "$DICTATION_ID" "$RUN/seed.txt" "$PATIENT" "$ENCOUNTER" <<'PY'
 import json, shutil, sys
 from pathlib import Path
 out, did, seed, patient, encounter = Path(sys.argv[1]), *sys.argv[2:]
@@ -176,11 +212,20 @@ shutil.copyfile(seed, out / "dictation.txt")
     "synthetic": True, "dictation_id": did, "text_file": "dictation.txt",
     "patient_context": {"patient_id": patient, "encounter_id": encounter}}, ensure_ascii=False))
 PY
+fi
 
-# 4. Portal bridge on the recorded mock, with its own drafts, audit and portal state.
-PORTAIL_BRIDGE_DRAFTS="$RUN/bridge/drafts.jsonl" PORTAIL_BRIDGE_AUDIT="$RUN/audit/portal-writes.jsonl" \
-PORTAIL_BRIDGE_STATE_DIR="$RUN/bridge/state" PORTAIL_DICTATION_DIR="$RUN/dictations" \
-  python3 -m harness.bridge.portail_bridge --backend mock --port "$BRIDGE_PORT" >"$RUN/logs/bridge.log" 2>&1 &
+# 4. Portal bridge on the recorded mock, with its own drafts, audit and portal state. Exports in a
+#    subshell, not `env VAR=…`: the API token never appears in a process's arguments.
+(
+  export PORTAIL_BRIDGE_DRAFTS="$RUN/bridge/drafts.jsonl" PORTAIL_BRIDGE_AUDIT="$RUN/audit/portal-writes.jsonl"
+  export PORTAIL_BRIDGE_STATE_DIR="$RUN/bridge/state"
+  if [ "$DICTATION_SOURCE" = file ]; then
+    export PORTAIL_DICTATION_DIR="$RUN/dictations"
+  else
+    export VOXLOCAL_API_URL="http://127.0.0.1:$AGENT_PORT" VOXLOCAL_API_TOKEN="$VOXLOCAL_AGENT_TOKEN"
+  fi
+  exec python3 -m harness.bridge.portail_bridge --backend mock --port "$BRIDGE_PORT"
+) >"$RUN/logs/bridge.log" 2>&1 &
 PIDS+=($!)
 for _ in $(seq 1 60); do grep -q "127.0.0.1:$BRIDGE_PORT" "$RUN/logs/bridge.log" 2>/dev/null && break; sleep 0.5; done
 grep -q "127.0.0.1:$BRIDGE_PORT" "$RUN/logs/bridge.log" || { echo "le pont n'a pas démarré (voir $RUN/logs/bridge.log)" >&2; exit 1; }
@@ -236,7 +281,9 @@ EOF
 
 if [ "$DRIVE" = 1 ]; then
   mkdir -p "$SHOTS"
-  node "$DEMO_DIR/drive-ui.mjs" --url "$WEB_URL" --message "$RUN/message.txt" --out "$SHOTS" \
+  # The web token stays out of argv: drive-ui reads it from DSH_WEB_TOKEN and appends ?token= itself.
+  DSH_WEB_TOKEN="$(printf '%s' "$WEB_URL" | sed -n 's/.*[?&]token=\([^&#]*\).*/\1/p')" \
+    node "$DEMO_DIR/drive-ui.mjs" --url "${WEB_URL%%\?*}" --message "$RUN/message.txt" --out "$SHOTS" \
     --browser "$HEADLESS_SHELL" --profile-dir "$RUN/chrome" | tee "$RUN/logs/drive.log"
   echo "Écritures au portail (mock) :"
   python3 -c 'import json,sys; [print("  ", r["event"], r["result"], r["draft_id"], r.get("backup_id") or "") for r in map(json.loads, open(sys.argv[1]))]' \

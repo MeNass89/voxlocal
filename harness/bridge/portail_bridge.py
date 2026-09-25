@@ -11,8 +11,12 @@ relayed over a second credential, can:
                                                    attribute, mode, base and final digests
     apply(draft_id) / restore(backup_id)  <--approved--
        one lock: approval valid + live digest == base digest + final digest re-derived
-       + patient/encounter binding -> journal line (approval consumed) -> write -> journal
+       + patient/encounter binding -> journal line (approval consumed) -> write -> read-back
+       must equal the approved final digest (else restore from the backup, fail) -> journal
        -> audit line. Replaying an applied draft returns the stored result, no second write.
+
+Drafts need a dictation source: every quote is found verbatim in a dictation that declares the
+draft's patient and encounter, or the draft is refused.
 
 Run (from the repository root):
 
@@ -22,8 +26,11 @@ Run (from the repository root):
 Environment: PORTAIL_BACKEND (mock|real, default mock), PORTAIL_MED_API_PATH (real backend),
 PORTAIL_BRIDGE_DRAFTS (default harness/bridge/drafts.jsonl), PORTAIL_BRIDGE_AUDIT (default
 harness/audit/portal-writes.jsonl), PORTAIL_BRIDGE_STATE_DIR (mock persistence, default
-harness/bridge/state), PORTAIL_DICTATION_DIR (dictation source for quote checks; defaults to the
-fixtures in mock mode, none in real mode).
+harness/bridge/state), PORTAIL_DICTATION_DIR (`dictation-*.json` records for quote checks),
+VOXLOCAL_API_URL + VOXLOCAL_API_TOKEN (the VoxLocal loopback dictation API, same purpose). Both
+may be set (directory first, then API); mock mode always adds the synthetic fixtures last. Real
+mode with neither has no source and every draft is refused (quotes cannot be verified: fail
+closed).
 
 Stdlib only. The audit log carries ids and digests, never clinical prose.
 """
@@ -39,6 +46,9 @@ import secrets
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,8 +56,8 @@ from pathlib import Path
 from typing import Callable
 
 from .interface import (
-    NARRATIVE_SECTIONS, DigestMismatch, EditRefused, NotFound, PortalBackend, PortalError,
-    digest, mutate,
+    NARRATIVE_SECTIONS, BackupInfo, DigestMismatch, EditRefused, NotFound, PortalBackend,
+    PortalError, VerificationFailed, digest, mutate,
 )
 
 HARNESS = Path(__file__).resolve().parent.parent
@@ -90,7 +100,7 @@ class DictationSource:
 
     Reads `dictation-*.json` records (`{dictation_id, patient_context, text | text_file}`) from
     a directory; `text_file` lines starting with '#' are headers and are dropped. The VoxLocal
-    agent API (H2) plugs in behind the same `get()`.
+    API plugs in behind the same `get()` (`ApiDictationSource`).
     """
 
     def __init__(self, directory: Path | str):
@@ -108,6 +118,103 @@ class DictationSource:
             ctx = rec.get("patient_context") or {}
             return Dictation(dictation_id, ctx.get("patient_id"), ctx.get("encounter_id"),
                              _collapse(text))
+        return None
+
+
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+_COMPACT_CONTEXT = re.compile(r"^\s*patient=(\S+)\s+rencontre=(\S+)\s*$")
+_FINISHED = ("completed", "completed_with_warning")
+
+
+def parse_patient_context(value: object) -> tuple[str | None, str | None]:
+    """`(patient_id, encounter_id)` from a VoxLocal `patientContext`.
+
+    Two forms bind a dictation: a JSON object `{"patient_id": …, "encounter_id": …}` and the
+    compact `patient=<id> rencontre=<id>`. Anything else (free text, null, one id only) binds
+    nothing, and the bridge refuses drafts quoting such a dictation.
+    """
+    if not isinstance(value, str):
+        return None, None
+    try:
+        obj = json.loads(value)
+    except ValueError:
+        obj = None
+    if isinstance(obj, dict):
+        pid, eid = obj.get("patient_id"), obj.get("encounter_id")
+        if isinstance(pid, str) and pid.strip() and isinstance(eid, str) and eid.strip():
+            return pid.strip(), eid.strip()
+        return None, None
+    m = _COMPACT_CONTEXT.match(value)
+    return (m.group(1), m.group(2)) if m else (None, None)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would carry the Bearer token to another host: refuse it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, "redirection refusée", headers, fp)
+
+
+class ApiDictationSource:
+    """Dictations read from the VoxLocal loopback API (`GET /v1/dictations/<id>`).
+
+    Loopback only, token from `VOXLOCAL_API_TOKEN`, 5 s per request, no proxy, no redirect. An
+    unreachable API fails the draft (503) instead of skipping the check.
+    """
+
+    def __init__(self, base_url: str, token: str, timeout: float = 5.0):
+        parsed = urllib.parse.urlsplit(base_url)
+        if parsed.scheme not in ("http", "https") or parsed.hostname not in LOOPBACK_HOSTS \
+                or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("VOXLOCAL_API_URL : URL http(s) en boucle locale (127.0.0.1), sans "
+                             "identifiants, query ni fragment")
+        if not token:
+            raise ValueError("VOXLOCAL_API_TOKEN requis pour lire les dictées")
+        self.base, self.token, self.timeout = base_url.rstrip("/"), token, timeout
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+
+    def get(self, dictation_id: str) -> Dictation | None:
+        url = f"{self.base}/v1/dictations/{urllib.parse.quote(dictation_id, safe='')}"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.token}",
+                                                   "Accept": "application/json"})
+        try:
+            with self.opener.open(req, timeout=self.timeout) as resp:
+                envelope = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            exc.close()
+            if exc.code == 404:
+                return None
+            err = PortalError(f"API VoxLocal : HTTP {exc.code} en lisant la dictée citée")
+            err.status = 503
+            raise err from None
+        except (OSError, ValueError):
+            err = PortalError("API VoxLocal injoignable ou réponse illisible : citations "
+                              "invérifiables")
+            err.status = 503
+            raise err from None
+        rec = envelope.get("data") if isinstance(envelope, dict) and envelope.get("ok") else None
+        if not isinstance(rec, dict) or rec.get("id") != dictation_id:
+            err = PortalError("API VoxLocal : réponse invalide pour la dictée citée")
+            err.status = 503
+            raise err
+        if rec.get("processingStatus") not in _FINISHED:
+            raise EditRefused(f"dictée {dictation_id!r} pas encore terminée : citer la version "
+                              "finale", dictation_id=dictation_id)
+        pid, eid = parse_patient_context(rec.get("patientContext"))
+        return Dictation(dictation_id, pid, eid, _collapse(str(rec.get("finalTranscription") or "")))
+
+
+class ChainedDictationSource:
+    """Several sources tried in order; the first that knows the id answers."""
+
+    def __init__(self, sources: list):
+        self.sources = list(sources)
+
+    def get(self, dictation_id: str) -> Dictation | None:
+        for source in self.sources:
+            found = source.get(dictation_id)
+            if found is not None:
+                return found
         return None
 
 
@@ -150,18 +257,51 @@ class Bridge:
         """A crash between the pre-write journal line and the post-write one. The approval is
         already consumed; decide from the live text whether the write landed."""
         try:
-            live = self.backend.read_section(rec["item_id"], rec["attribute"]).digest
+            section = self.backend.read_section(rec["item_id"], rec["attribute"])
         except PortalError:
-            live = None
+            section = None
+        live = section.digest if section is not None else None
         rec = copy.deepcopy(rec)
-        if live == rec["final_text_digest"]:
+        event = "restore" if rec["kind"] == "restore" else "apply"
+        if section is not None and live == rec["final_text_digest"]:
+            backup_id = self._recovered_backup(rec)
             rec["status"] = "applied"
-            rec["apply"] = {"ts": _iso(self.clock()), "recovered": True, "readback_digest": live}
+            rec["apply"] = {"ts": _iso(self.clock()), "recovered": True, "readback_digest": live,
+                            "item_id": rec["item_id"], "attribute": rec["attribute"],
+                            "mode": rec["mode"],
+                            # The write's own version pair is lost with the crash; the draft's
+                            # base version and the live version bound it.
+                            "version_before": rec.get("base_version"),
+                            "version_after": section.version}
+            if backup_id is not None:  # absent rather than null: the tool schema wants a string
+                rec["apply"]["backup_id"] = backup_id
+            if rec["kind"] == "restore":
+                rec["apply"]["restored"] = True
+            self._journal(rec)
+            self._audit(event, rec, "ok", recovered=True, readback_digest=live,
+                        backup_id=backup_id, version_after=section.version)
         else:
             rec["status"] = "failed"
             rec["error"] = {"status": 409, "message": "écriture interrompue non constatée : "
                                                       "refaire le brouillon"}
-        self._journal(rec)
+            self._journal(rec)
+            self._audit(event, rec, "error", status=409, reason="interrupted-write-not-found",
+                        live_digest=live)
+
+    def _recovered_backup(self, rec: dict) -> str | None:
+        """The backup a crashed write left behind, so `draft_restore` keeps working."""
+        if rec["kind"] == "restore":
+            return rec["backup_id"]  # the backup this restore put back
+        find = getattr(self.backend, "find_backup", None)
+        if find is None:
+            return None
+        try:
+            info = find(rec["item_id"], rec["attribute"], rec["final_text_digest"])
+        except PortalError:
+            return None
+        if info is None or info.original_digest != rec["base_digest"]:
+            return None
+        return info.backup_id
 
     def _journal(self, rec: dict) -> None:
         """Append the draft's new full state, fsync'd, then publish it in memory."""
@@ -221,7 +361,9 @@ class Bridge:
     def _check_quotes(self, patient_id: str, encounter_id: str, quotes: list) -> tuple[list, bool]:
         if not isinstance(quotes, list) or not quotes:
             raise EditRefused("au moins une citation de la dictée est exigée (quotes)")
-        checked, verified = [], self.dictations is not None
+        if self.dictations is None:  # draft_create refuses first; kept as a second lock
+            raise EditRefused("aucune source de dictées : citations invérifiables")
+        checked = []
         for q in quotes:
             if not isinstance(q, dict) or not isinstance(q.get("dictation_id"), str) \
                     or not isinstance(q.get("text"), str) or not q["text"].strip():
@@ -231,18 +373,17 @@ class Bridge:
                                        or offset < 0):
                 raise EditRefused("citation : offset doit être un entier positif")
             text = _collapse(q["text"])
-            if self.dictations is None:
-                checked.append({"dictation_id": q["dictation_id"], "offset": offset,
-                                "text": text, "verified": False})
-                continue
             d = self.dictations.get(q["dictation_id"])
             if d is None:
                 raise EditRefused(f"dictée {q['dictation_id']!r} inconnue : citation "
                                   "introuvable dans la dictée")
-            if d.patient_id is not None and d.patient_id != patient_id:
+            if d.patient_id is None or d.encounter_id is None:
+                raise Forbidden("la dictée citée ne déclare pas de patient/rencontre : "
+                                "brouillon refusé", dictation_id=d.dictation_id)
+            if d.patient_id != patient_id:
                 raise Forbidden("la dictée citée appartient à un autre patient que le "
                                 "brouillon", dictation_id=d.dictation_id)
-            if d.encounter_id is not None and d.encounter_id != encounter_id:
+            if d.encounter_id != encounter_id:
                 raise Forbidden("la dictée citée appartient à une autre rencontre que le "
                                 "brouillon", dictation_id=d.dictation_id)
             hits = [m.start() for m in re.finditer(re.escape(text), d.text)]
@@ -252,7 +393,7 @@ class Bridge:
             at = min(hits, key=lambda h: abs(h - (offset or 0)))
             checked.append({"dictation_id": d.dictation_id, "offset": at, "text": text,
                             "verified": True})
-        return checked, verified
+        return checked, True
 
     def _check_binding(self, patient_id: str, encounter_id: str, section) -> None:
         if section.patient_id != patient_id:
@@ -273,6 +414,9 @@ class Bridge:
         if attribute not in NARRATIVE_SECTIONS:
             raise EditRefused(f"attribut {attribute!r} non narratif ; sections éditables : "
                               f"{list(NARRATIVE_SECTIONS)}")
+        if self.dictations is None:
+            raise EditRefused("aucune source de dictées : citations invérifiables ; définir "
+                              "PORTAIL_DICTATION_DIR ou VOXLOCAL_API_URL")
         with self._lock:
             section = self.backend.read_section(item_id, attribute)
             self._check_binding(patient_id, encounter_id, section)
@@ -452,6 +596,8 @@ class Bridge:
             self._journal(failed)
             self._audit(event, applying, "error", status=err.status, reason=type(err).__name__)
             raise
+        if result.get("readback_digest") != rec["final_text_digest"]:
+            return self._readback_mismatch(applying, result)
         applied = copy.deepcopy(applying)
         applied["status"] = "applied"
         applied["apply"] = {"ts": _iso(self.clock()), **result}
@@ -461,6 +607,35 @@ class Bridge:
                     readback_digest=result.get("readback_digest"),
                     backup_id=result.get("backup_id"))
         return self._applied_view(applied, replayed=False)
+
+    def _readback_mismatch(self, applying: dict, result: dict):
+        """The backend wrote, but the text it read back is not the approved final text (another
+        client edited between our check and its write). Backend-agnostic: undo from the backup
+        when there is one, never report success."""
+        event = "restore" if applying["kind"] == "restore" else "apply"
+        failed = copy.deepcopy(applying)
+        failed["status"] = "failed"
+        failed["error"] = {"status": 409, "message": "relecture différente du texte approuvé"}
+        failed["apply_readback"] = {"readback_digest": result.get("readback_digest"),
+                                    "backup_id": result.get("backup_id")}
+        self._journal(failed)
+        backup_id, restored = result.get("backup_id"), False
+        # Only an edit left a backup of the text it replaced; a restore has nothing to undo to.
+        if backup_id and applying["kind"] == "edit":
+            try:
+                restored = bool(self.backend.restore(backup_id).restored)
+                self._audit("restore-after-mismatch", failed, "ok" if restored else "error",
+                            backup_id=backup_id)
+            except PortalError as err:
+                self._audit("restore-after-mismatch", failed, "error", status=err.status,
+                            reason=type(err).__name__, backup_id=backup_id)
+        self._audit(event, failed, "error", status=409, reason="final-readback-mismatch",
+                    readback_digest=result.get("readback_digest"), backup_id=backup_id,
+                    restored=restored)
+        raise VerificationFailed("relecture différente du texte approuvé : "
+                                 + ("sauvegarde restaurée" if restored
+                                    else "vérifier la section, restauration non faite"),
+                                 backup_id=backup_id, restored=restored)
 
     @staticmethod
     def _applied_view(rec: dict, replayed: bool) -> dict:
@@ -677,7 +852,7 @@ class RealPortal:
                        len(text), item["version"], digest(text))
 
     def apply(self, item_id, attribute, base_digest, new_text, mode, old=None):
-        from .interface import EditResult, VerificationFailed
+        from .interface import EditResult
         live = self._rec.read(item_id, attribute)
         if digest(live) != base_digest:
             raise DigestMismatch("la section a changé depuis le brouillon",
@@ -690,14 +865,41 @@ class RealPortal:
             res = self._rec.replace(item_id, attribute, old, new_text, commit=True)
         else:
             raise EditRefused(f"mode inconnu {mode!r}")
+        if res.old_digest != base_digest:
+            # `Record.append/replace` re-read the item: another client wrote between our check
+            # and the write, so the edit landed on a text nobody approved. Undo it.
+            restored = bool(self._rec.restore(res.backup))
+            if not restored:
+                raise VerificationFailed("la section a changé entre la vérification et "
+                                         "l'écriture ; restauration impossible : vérifier la "
+                                         "section", backup_id=res.backup.name)
+            raise DigestMismatch("la section a changé entre la vérification et l'écriture ; "
+                                 "sauvegarde restaurée", expected=base_digest,
+                                 live=res.old_digest, backup_id=res.backup.name)
         if not res.verified or (mode == "append" and not res.prefix_intact):
             raise VerificationFailed("relecture non conforme", backup_id=res.backup.name)
         return EditResult(item_id, attribute, mode, res.old_length, res.new_length,
                           res.old_digest, res.new_digest, res.new_digest, before, res.version,
                           res.verified, res.prefix_intact, res.backup.name)
 
+    def find_backup(self, item_id, attribute, current_digest):
+        """Newest `records.DATA` backup of this attribute whose edited text is `current_digest`."""
+        found = []
+        for path in self._records.DATA.glob("backup_*.json"):
+            try:
+                bak = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(bak, dict) and bak.get("item") == item_id \
+                    and bak.get("attr") == attribute and bak.get("current_digest") == current_digest:
+                found.append((path.stat().st_mtime, path.name, bak))
+        if not found:
+            return None
+        _, name, bak = max(found, key=lambda f: (f[0], f[1]))
+        return BackupInfo(name, bak["item"], bak["attr"], bak["original_text"],
+                          bak["original_digest"], bak["current_digest"], bak["taken"])
+
     def backup_info(self, backup_id):
-        from .interface import BackupInfo
         path = self._records.DATA / Path(backup_id).name
         if not path.exists():
             raise NotFound(f"sauvegarde {backup_id!r} inconnue")
@@ -721,15 +923,27 @@ def build_bridge_from_env(backend_kind: str | None = None) -> Bridge:
     kind = backend_kind or os.environ.get("PORTAIL_BACKEND", "mock")
     state = Path(os.environ.get("PORTAIL_BRIDGE_STATE_DIR", DEFAULT_STATE))
     backend = make_backend(kind, state)
+    return Bridge(backend, os.environ.get("PORTAIL_BRIDGE_DRAFTS", DEFAULT_DRAFTS),
+                  os.environ.get("PORTAIL_BRIDGE_AUDIT", DEFAULT_AUDIT), dictations_from_env(kind))
+
+
+def dictations_from_env(kind: str):
+    """Directory source, then VoxLocal API source, then (mock mode only) the synthetic fixtures.
+    None (real mode, nothing configured) makes every draft refused."""
+    sources: list = []
     dict_dir = os.environ.get("PORTAIL_DICTATION_DIR")
     if dict_dir:
-        dictations = DictationSource(dict_dir)
-    elif kind == "mock":
-        dictations = DictationSource(Path(__file__).resolve().parent / "fixtures")
-    else:
-        dictations = None
-    return Bridge(backend, os.environ.get("PORTAIL_BRIDGE_DRAFTS", DEFAULT_DRAFTS),
-                  os.environ.get("PORTAIL_BRIDGE_AUDIT", DEFAULT_AUDIT), dictations)
+        sources.append(DictationSource(dict_dir))
+    api_url, api_token = os.environ.get("VOXLOCAL_API_URL"), os.environ.get("VOXLOCAL_API_TOKEN")
+    if api_url and api_token:
+        sources.append(ApiDictationSource(api_url, api_token))
+    elif api_url:
+        raise ValueError("VOXLOCAL_API_URL défini sans VOXLOCAL_API_TOKEN")
+    if kind == "mock":
+        sources.append(DictationSource(Path(__file__).resolve().parent / "fixtures"))
+    if not sources:
+        return None
+    return sources[0] if len(sources) == 1 else ChainedDictationSource(sources)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -67,7 +67,9 @@ export function roleText(service: string): string {
 
 export const LOOP_TEXT = [
   '# La boucle de travail',
-  '1. Lire la dictée (texte reçu dans la conversation, ou `dictation_get`). Repérer le patient déclaré.',
+  '1. Lire la dictée (texte reçu dans la conversation, ou `dictation_get`). Repérer le patient déclaré. '
+    + 'Une dictée dont l\'identifiant a déjà été reçu (message marqué « Renvoi possible après interruption ») est un renvoi, '
+    + 'pas une nouvelle dictée : ne refaites pas les brouillons déjà préparés pour elle.',
   '2. Lire le dossier : `patient_resolve` si besoin, puis `record_find_sections` pour les sections narratives de la rencontre, '
     + 'et `record_read_section` juste avant de rédiger.',
   '3. Proposer un brouillon par section avec `record_draft_edit` : une section à la fois, mode « append » par défaut, '

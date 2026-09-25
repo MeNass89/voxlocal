@@ -30,11 +30,16 @@ export async function mount(options: {
   await ctx.plugin(ApprovalService, { policy: options.policy })
   await ctx.plugin(PortailTools, options.portail)
   await ctx.plugin(ScribeApproval, options.approval)
-  const session = ctx.sessions.create(SessionId(`scribe-approval-${++seq}`))
-  session.append('turn/start', { turn: 1 })
-  const agent = { session } as never
-  const run = (name: string, args: Record<string, unknown>): Promise<ToolExecutionResult> =>
-    ctx.tools.execute({ signal: new AbortController().signal, callId: ToolCallId(`call-${++seq}`), name, arguments: args as never, agent })
+  const openSession = () => {
+    const s = ctx.sessions.create(SessionId(`scribe-approval-${++seq}`))
+    s.append('turn/start', { turn: 1 })
+    return s
+  }
+  const session = openSession()
+  /** One tool call in `target` with an explicit call id (dsh call ids repeat across sessions). */
+  const runAs = (target: typeof session, callId: string, name: string, args: Record<string, unknown>): Promise<ToolExecutionResult> =>
+    ctx.tools.execute({ signal: new AbortController().signal, callId: ToolCallId(callId), name, arguments: args as never, agent: { session: target } as never })
+  const run = (name: string, args: Record<string, unknown>): Promise<ToolExecutionResult> => runAs(session, `call-${++seq}`, name, args)
   const approvalEvents = () => session.snapshotEvents().filter(e => e.type.startsWith('approval/'))
-  return { ctx, run, session, approvalEvents }
+  return { ctx, run, runAs, openSession, session, approvalEvents }
 }

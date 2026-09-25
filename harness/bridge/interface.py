@@ -232,3 +232,7 @@ class PortalBackend(Protocol):
 
     def restore(self, backup_id: str) -> RestoreResult:
         """Put the backup back if the live text still is the edited text (digest-matched)."""
+
+    # Optional, used by the bridge's crash recovery when present (mock and real both have it):
+    #   find_backup(item_id, attribute, current_digest) -> BackupInfo | None
+    # the newest backup of that attribute whose edited text has `current_digest`.

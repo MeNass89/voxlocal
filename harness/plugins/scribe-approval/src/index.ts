@@ -10,12 +10,15 @@
  *     -> dsh `ctx.approval` (policy `ask` | `never`) -> `approval/request` answerers (the Web chat)
  *     -> on `allowed-once`, this plugin's pass-through answerer calls bridge `approve_draft` with
  *        PORTAIL_BRIDGE_APPROVER_TOKEN before the tool may run; a failed relay becomes `unavailable`
- *     -> `ctx.tools.guard()`: monotonic deny unless THIS call id holds a relayed grant for THIS draft
+ *     -> `ctx.tools.guard()`: monotonic deny unless THIS session + call id holds a relayed grant for THIS draft
+ *        (dsh call ids are the model's `call_1`…, unique only within a session)
  *     -> tool body (portail-tools) asks the bridge to write; the bridge re-checks everything
  *     -> `tools/post-execute`: a call that ran without a grant, or was denied, reaches the model as
  *        « Application refusée : aucun feu vert. »
  *
- * Every decision is appended to `harness/audit/approvals.jsonl` (ids and digests, no prose).
+ * Every decision is appended to `harness/audit/approvals.jsonl` (ids and digests, no prose): a key the
+ * model supplied is logged only when it has the shape of a bridge id, otherwise as a digest, and errors
+ * are logged by code and status, never by message.
  * @module @voxlocal/scribe-approval
  */
 
@@ -92,9 +95,12 @@ export interface Draft {
 
 class RpcError extends Error {
   readonly code: number
-  constructor(code: number, message: string) {
+  /** HTTP-like status the bridge attached (`error.data.status`), when it did. */
+  readonly status: number | undefined
+  constructor(code: number, message: string, status?: number) {
     super(message)
     this.code = code
+    this.status = status
   }
 }
 
@@ -114,8 +120,11 @@ async function rpc<T>(url: string, token: string | undefined, method: string, pa
     throw new RpcError(503, `pont portail injoignable : ${(error as Error).message}`)
   }
   const body = await response.json().catch(() => undefined) as
-    | { result?: T, error?: { code: number, message: string } } | undefined
-  if (body?.error !== undefined) throw new RpcError(body.error.code, body.error.message)
+    | { result?: T, error?: { code: number, message: string, data?: { status?: unknown } } } | undefined
+  if (body?.error !== undefined) {
+    const status = body.error.data?.status
+    throw new RpcError(body.error.code, body.error.message, typeof status === 'number' ? status : undefined)
+  }
   if (!response.ok || body === undefined || !('result' in body)) {
     throw new RpcError(response.status || 502, `réponse invalide du pont (HTTP ${response.status})`)
   }
@@ -168,13 +177,19 @@ export function approvalPrompt(tool: GatedTool, draft: Draft, patientLabel: stri
     : draft.quotes.map(q => `  « ${q.text} » (dictée ${q.dictation_id}${q.offset === null ? '' : `, car. ${q.offset}`}`
       + `${q.verified ? ', retrouvée dans la dictée' : ', NON VÉRIFIÉE'})`)
   const dictations = [...new Set(draft.quotes.map(q => q.dictation_id))]
+  // The patient claim is made only when the bridge verified every quote (it refuses to store any other
+  // draft today; drafts journaled before that rule still render, flagged).
+  const verified = draft.quotes_verified && draft.quotes.every(q => q.verified)
+  const dictationLine = verified
+    ? `Dictée : ${dictations.join(', ')} (patient de la dictée = patient du brouillon, vérifié par le pont)`
+    : `Dictée : ${dictations.join(', ')} (Citations NON VÉRIFIÉES par le pont)`
   return [
     `Feu vert demandé : ${action}.`,
     `Patient : ${draft.patient_id}${patientLabel === undefined ? '' : ` (${patientLabel})`}`,
     `Rencontre : ${draft.encounter_id}`,
     `Document : ${draft.item_id}`,
     `Section : ${section}`,
-    ...(dictations.length === 0 ? [] : [`Dictée : ${dictations.join(', ')} (patient de la dictée = patient du brouillon, vérifié par le pont)`]),
+    ...(dictations.length === 0 ? [] : [dictationLine]),
     `Brouillon : ${draft.draft_id}`,
     // The dsh web panel renders this text as one paragraph (newlines collapse), so every diff
     // line carries its own label and quotes instead of relying on layout.
@@ -191,7 +206,7 @@ interface Pending {
   tool: GatedTool
   draft: Draft
   argsDigest: string
-  sessionId: string | undefined
+  sessionId: string
   /** Set once the approval seam consulted the answerers (never set under policy `never`). */
   outcome?: ApprovalOutcome
   audited?: boolean
@@ -206,6 +221,29 @@ interface Grant {
 
 function argsDigest(args: unknown): string {
   return createHash('sha256').update(JSON.stringify(args)).digest('hex').slice(0, 16)
+}
+
+const NO_SESSION = 'no-session'
+
+/** dsh call ids come from the model (`call_1`…) and repeat across sessions: scope them. */
+export function callKey(sessionId: string | undefined, callId: string): string {
+  return `${sessionId ?? NO_SESSION}\u0000${callId}`
+}
+
+/** Bridge ids: `drf-…` drafts, `bak-…` mock backups. Anything else stays out of the audit as text. */
+const BRIDGE_ID = /^(drf|bak)-[A-Za-z0-9._-]{1,80}$/
+
+/** Audit fields for a key the model supplied: verbatim only when it has the shape of a bridge id. */
+export function auditKey(key: string): Record<string, unknown> {
+  return BRIDGE_ID.test(key)
+    ? { key }
+    : { key_digest: createHash('sha256').update(key).digest('hex').slice(0, 16), key_valid: false }
+}
+
+/** Audit fields for a failure: code and status, never the message (it can echo model input). */
+function auditError(error: unknown): Record<string, unknown> {
+  if (error instanceof RpcError) return { error_code: error.code, ...(error.status === undefined ? {} : { status: error.status }) }
+  return { error_code: error instanceof Error ? error.name : 'unknown' }
 }
 
 function isGated(name: string): name is GatedTool {
@@ -227,6 +265,13 @@ const OUTCOME_FR: Record<string, string> = {
   'no-grant': 'appel sans feu vert enregistré',
 }
 
+/** A failed write, for the audit: the tool's error code and the bridge status (portail-tools prefixes its
+ *  refusals with « Pont portail (<status>) »), never the message. */
+function resultError(error: { message: string, info?: { code: string } }): Record<string, unknown> {
+  const status = /^Pont portail \((\d{3})\)/.exec(error.message)?.[1]
+  return { error_code: error.info?.code ?? 'tool-error', ...(status === undefined ? {} : { status: Number(status) }) }
+}
+
 export function apply(ctx: Context, config: Config = {}) {
   const url = config.bridgeUrl ?? 'http://127.0.0.1:47368/'
   const host = new URL(url).hostname
@@ -246,6 +291,7 @@ export function apply(ctx: Context, config: Config = {}) {
   }
 
   function auditDecision(callId: string, p: Pending, decision: string, extra: Record<string, unknown> = {}): void {
+    // p.draft comes from the bridge (ids, digests); nothing here is model text.
     audit({
       event: 'decision', decision, tool: p.tool, call_id: callId, session_id: p.sessionId,
       draft_id: p.draft.draft_id, kind: p.draft.kind, backup_id: p.draft.backup_id,
@@ -282,7 +328,8 @@ export function apply(ctx: Context, config: Config = {}) {
     if (downstream.kind === 'deny' || downstream.kind === 'cancel') return downstream
     const tool = exec.name
     const key = keyOf(tool, exec.arguments)
-    const base = { tool, call_id: exec.callId, session_id: exec.agent?.session.id, args_digest: argsDigest(exec.arguments) }
+    const sessionId = exec.agent?.session.id ?? NO_SESSION
+    const base = { tool, call_id: exec.callId, session_id: sessionId, args_digest: argsDigest(exec.arguments) }
     if (key === undefined) {
       audit({ event: 'decision', decision: 'refused-before-ask', reason: 'identifiant manquant', ...base })
       return { kind: 'deny', reason: `${REFUSAL} (${tool === 'record_apply' ? 'draft_id' : 'backup_id'} manquant)` }
@@ -292,7 +339,7 @@ export function apply(ctx: Context, config: Config = {}) {
       draft = await loadDraft(tool, key, exec.signal)
     } catch (error) {
       const e = error as RpcError
-      audit({ event: 'decision', decision: 'refused-before-ask', reason: `pont ${e.code ?? '?'}`, key, ...base })
+      audit({ event: 'decision', decision: 'refused-before-ask', reason: `pont ${e.code ?? '?'}`, ...auditKey(key), ...auditError(error), ...base })
       return { kind: 'deny', reason: `${REFUSAL} Brouillon illisible sur le pont (${e.code ?? '?'}) : ${e.message}` }
     }
     if (draft.status !== 'drafted' && draft.status !== 'approved') {
@@ -304,7 +351,7 @@ export function apply(ctx: Context, config: Config = {}) {
           : `${REFUSAL} Brouillon ${draft.draft_id} au statut « ${draft.status} » : préparer un nouveau brouillon.`,
       }
     }
-    pending.set(exec.callId, { tool, draft, argsDigest: base.args_digest, sessionId: base.session_id })
+    pending.set(callKey(sessionId, exec.callId), { tool, draft, argsDigest: base.args_digest, sessionId })
     const text = approvalPrompt(tool, draft, await patientLabel(draft.patient_id, exec.signal))
     return {
       kind: 'ask',
@@ -316,8 +363,11 @@ export function apply(ctx: Context, config: Config = {}) {
 
   // 2. Relay: wrap the answerers; a human `allowed-once` reaches the bridge before the tool runs.
   ctx.on('approval/request', async (req, next) => {
-    const p = req.callId === undefined ? undefined : pending.get(req.callId)
-    if (p === undefined || req.toolName !== p.tool) return next()
+    if (req.callId === undefined) return next()
+    const sessionId = req.agent.session.id ?? NO_SESSION
+    const p = pending.get(callKey(sessionId, req.callId))
+    // Only the question this plugin asked, in the session that asked it, is relayed.
+    if (p === undefined || req.toolName !== p.tool || p.sessionId !== sessionId) return next()
     const callId = req.callId as string
     const outcome = await next()
     p.outcome = outcome
@@ -333,11 +383,11 @@ export function apply(ctx: Context, config: Config = {}) {
         ? 'approuvé-antérieurement'
         : (await rpc<{ approval_id: string }>(url, process.env[approverTokenEnv], 'approve_draft',
             { draft_id: p.draft.draft_id, answerer }, timeoutMs, req.signal)).approval_id
-      grants.set(callId, { tool: p.tool, draftId: p.draft.draft_id, key: p.tool === 'record_apply' ? p.draft.draft_id : p.draft.backup_id!, approvalId })
+      grants.set(callKey(sessionId, callId), { tool: p.tool, draftId: p.draft.draft_id, key: p.tool === 'record_apply' ? p.draft.draft_id : p.draft.backup_id!, approvalId })
       auditDecision(callId, p, 'allowed', { answerer, approval_id: approvalId })
       return outcome
     } catch (error) {
-      auditDecision(callId, p, 'relay-failed', { answerer, error: (error as Error).message })
+      auditDecision(callId, p, 'relay-failed', { answerer, ...auditError(error) })
       return 'unavailable'
     }
   }, { prepend: true })
@@ -345,7 +395,7 @@ export function apply(ctx: Context, config: Config = {}) {
   // 3. Belt and braces: whatever allowed it, a gated call runs only with a relayed grant for its target.
   ctx.effect(() => ctx.tools.guard((exec) => {
     if (!isGated(exec.name)) return undefined
-    const grant = grants.get(exec.callId)
+    const grant = grants.get(callKey(exec.agent?.session.id, exec.callId))
     const key = keyOf(exec.name, exec.arguments)
     if (grant === undefined || grant.tool !== exec.name || key === undefined || grant.key !== key) {
       return `${REFUSAL} (${OUTCOME_FR['no-grant']})`
@@ -356,8 +406,9 @@ export function apply(ctx: Context, config: Config = {}) {
   // 4. What the model reads when an asked call did not run. Denials before the question keep
   //    their own explanation (missing id, unreadable or already applied draft).
   ctx.on('tools/post-execute', async (exec, result: Readonly<ToolExecutionResult>, next): Promise<PostToolDecision> => {
-    const p = pending.get(exec.callId)
-    if (!isGated(exec.name) || !result.isError || grants.has(exec.callId) || p === undefined) return next()
+    const k = callKey(exec.agent?.session.id, exec.callId)
+    const p = pending.get(k)
+    if (!isGated(exec.name) || !result.isError || grants.has(k) || p === undefined) return next()
     if (!p.audited) auditDecision(exec.callId, p, 'rejected', { reason: 'politique never : aucun clinicien consulté' })
     const why = p.outcome === undefined ? 'rejected' : p.outcome === 'allowed-once' ? 'relay-failed' : p.outcome
     return {
@@ -369,12 +420,14 @@ export function apply(ctx: Context, config: Config = {}) {
   // 5. Close the loop: the write outcome, then forget the call.
   ctx.on('tools/result', (exec, result) => {
     if (!isGated(exec.name)) return
-    const grant = grants.get(exec.callId)
+    const k = callKey(exec.agent?.session.id, exec.callId)
+    const grant = grants.get(k)
     if (grant !== undefined) {
-      audit({ event: 'result', tool: exec.name, call_id: exec.callId, draft_id: grant.draftId, approval_id: grant.approvalId,
-        ok: !result.isError, ...(result.isError ? { error: result.error.message } : {}) })
+      audit({ event: 'result', tool: exec.name, call_id: exec.callId, session_id: exec.agent?.session.id ?? NO_SESSION,
+        draft_id: grant.draftId, approval_id: grant.approvalId, ok: !result.isError,
+        ...(result.isError ? resultError(result.error) : {}) })
     }
-    pending.delete(exec.callId)
-    grants.delete(exec.callId)
+    pending.delete(k)
+    grants.delete(k)
   })
 }

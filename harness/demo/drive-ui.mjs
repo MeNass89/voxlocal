@@ -1,8 +1,11 @@
 // Drive the dsh web chat through the 90-second « Parcours agent » and save the five evidence PNGs.
 // Chrome DevTools Protocol over Node's built-in WebSocket: no npm dependency.
 //
-//   node harness/demo/drive-ui.mjs --url <dsh web URL with ?token=> --message <file> --out <dir>
-//        --browser <chrome-headless-shell> [--profile-dir <dir>] [--prefix <name>]
+//   DSH_WEB_TOKEN=<token> node harness/demo/drive-ui.mjs --url <dsh web URL, no token> --message <file>
+//        --out <dir> --browser <chrome-headless-shell> [--profile-dir <dir>] [--prefix <name>]
+//
+// The web token comes from the environment and is appended as ?token= here, so it never shows in the
+// process arguments (ps) of this script.
 //
 // Steps: send the delivered dictation -> (a) dictation in the chat -> wait for the first approval
 // -> (b) drafts with sections and quotes -> (c) approval prompt -> « Allow once » for every write
@@ -22,6 +25,10 @@ const { values: opt } = parseArgs({
   },
 })
 for (const k of ['url', 'message', 'out', 'browser']) if (!opt[k]) throw new Error(`--${k} requis`)
+const webUrl = new URL(opt.url)
+if (webUrl.searchParams.has('token')) throw new Error('--url sans jeton : passer le jeton par DSH_WEB_TOKEN')
+if (!process.env.DSH_WEB_TOKEN) throw new Error('DSH_WEB_TOKEN requis (jeton de l’interface web dsh)')
+webUrl.searchParams.set('token', process.env.DSH_WEB_TOKEN)
 mkdirSync(opt.out, { recursive: true })
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -142,7 +149,7 @@ async function main() {
   await send('Page.enable')
   await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 2, mobile: false })
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
-  await send('Page.navigate', { url: opt.url })
+  await send('Page.navigate', { url: webUrl.href })
   await waitFor(`document.readyState === 'complete' && !!document.querySelector('[contenteditable="true"]')`, 'interface dsh')
   await sleep(1500)
   if (await evaluate(`[...document.querySelectorAll('button')].some((b) => b.innerText.trim() === 'Continue')`)) {

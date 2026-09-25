@@ -355,17 +355,33 @@ patient, à la rencontre, à la section, au mode et aux empreintes du texte de
 départ et du texte final. Sous un seul verrou, le pont vérifie l’approbation,
 relit la section et compare son empreinte, écrit une ligne de journal, puis
 écrit dans le portail. Si la section a changé entre-temps ou si le brouillon a
-été modifié, il répond 409. Rejouer un brouillon déjà appliqué, même après un
-redémarrage du pont, ne produit pas de seconde écriture. Une citation qui n’est
-pas une sous-chaîne de la dictée référencée, ou une dictée d’un autre patient,
-fait refuser le brouillon.
+été modifié, il répond 409. Après l’écriture, le texte relu doit avoir
+l’empreinte du texte final approuvé : sinon (un autre client du portail a
+modifié la section entre la vérification et l’écriture), le pont restaure la
+sauvegarde, journalise l’échec et ne rapporte aucun succès ; l’adaptateur du
+portail réel fait la même comparaison sur le résultat de `Record.append/replace`.
+Rejouer un brouillon déjà appliqué, même après un redémarrage du pont, ne produit
+pas de seconde écriture ; une écriture interrompue par un arrêt du pont est
+retrouvée au redémarrage avec sa sauvegarde, et reste annulable.
+
+**Citations et patient, vérifiés ou refusés.** Le pont exige une source de
+dictées : un dossier de dictées (`PORTAIL_DICTATION_DIR`) ou l’API locale de
+VoxLocal (`VOXLOCAL_API_URL` en boucle locale + `VOXLOCAL_API_TOKEN`, lecture de
+`GET /v1/dictations/<id>`). Sans source, tout brouillon est refusé : il n’existe
+pas de mode où les citations passent sans vérification. Chaque citation doit être
+une sous-chaîne de la dictée référencée, et cette dictée doit déclarer le patient
+**et** la rencontre du brouillon (contexte patient `patient=<id> rencontre=<id>`
+ou objet JSON équivalent) ; une dictée sans patient déclaré, ou d’un autre
+patient, fait refuser le brouillon.
 
 **La question au médecin.** Dans le chat web `dsh`, le plugin
 [`scribe-approval`](../harness/plugins/scribe-approval) suspend `record_apply` et
 `record_restore` et affiche le patient, la rencontre, la section, le diff exact
 et les citations. Sur « Allow once », le plugin, jamais le modèle, transmet la
-décision au pont. « Reject », une absence de réponse ou la politique `never` :
-l’outil ne s’exécute pas. Cette porte est l’interface, pas la frontière : un test
+décision au pont. L’accord est lié à la session du chat et à l’appel d’outil qui
+l’a demandé : un appel d’une autre session, même avec le même identifiant
+d’appel, n’en profite pas. « Reject », une absence de réponse ou la politique
+`never` : l’outil ne s’exécute pas. Cette porte est l’interface, pas la frontière : un test
 retire le plugin et constate que le pont refuse quand même
 (`test_without_the_harness_gate_the_bridge_still_refuses`,
 [`test_loop.py`](../harness/tests/test_loop.py)).
@@ -400,7 +416,10 @@ décision : autorisé, refusé, annulé, indisponible, relais échoué, puis le
 résultat de l’écriture, avec le nom du médecin tiré de `SCRIBE_CLINICIAN`) et
 `harness/audit/portal-writes.jsonl` côté pont (chaque écriture ou refus, avec
 identifiants, empreintes, identifiant d’approbation et répondant). Identifiants
-et empreintes seulement, jamais le texte clinique. Les brouillons, eux,
+et empreintes seulement, jamais le texte clinique : un identifiant fourni par le
+modèle n’est inscrit que s’il a la forme d’un identifiant du pont (sinon son
+empreinte), et une erreur est inscrite par son code et son statut, jamais par
+son message. Les brouillons, eux,
 contiennent le texte proposé : `drafts.jsonl` et les dossiers d’audit sont
 ignorés par git, et leur rétention est à définir avec le DPO avant le portail
 réel.

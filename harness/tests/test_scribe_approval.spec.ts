@@ -248,6 +248,104 @@ describe('scribe-approval gate', () => {
     expect(bridge.writes().map(l => l.event)).toEqual(['apply'])
   })
 
+  it('an approval in one session never grants the same call id in another session', async () => {
+    const h = await setup('ask')
+    const sessionB = h.openSession()
+    const draftA = await draft(h.run)
+    const draftB = await draft(h.run)
+    // Both sessions' models number their tool calls from call_1.
+    const asked: Array<{ session: string, draftShown: string }> = []
+    let bothAsked!: () => void
+    const both = new Promise<void>((ok) => { bothAsked = ok })
+    let aDone!: () => void
+    const aAnswered = new Promise<void>((ok) => { aDone = ok })
+    h.ctx.on('approval/request', async (req) => {
+      const session = String(req.agent.session.id)
+      asked.push({ session, draftShown: /Brouillon : (drf-[0-9a-f]+)/.exec(req.displayReason?.en ?? '')?.[1] ?? '?' })
+      if (asked.length === 2) bothAsked()
+      await Promise.race([both, new Promise(ok => setTimeout(ok, 5_000))])
+      if (session === String(h.session.id)) {
+        setTimeout(aDone, 300) // let A's relay reach the bridge before B is answered
+        return 'allowed-once'
+      }
+      await aAnswered
+      return 'rejected'
+    })
+    const [resA, resB] = await Promise.all([
+      h.runAs(h.session, 'call_1', 'record_apply', { draft_id: draftA }),
+      h.runAs(sessionB, 'call_1', 'record_apply', { draft_id: draftB }),
+    ])
+    expect(asked.map(a => a.draftShown).sort()).toEqual([draftA, draftB].sort())
+    expect(resA.isError, textOf(resA)).toBe(false)
+    expect(resB.isError).toBe(true)
+    expect(textOf(resB)).toContain(ScribeApproval.REFUSAL)
+    // The clinician's yes in session A reached draft A only.
+    expect((await bridge.rpc('draft_get', { draft_id: draftA })).result!.status).toBe('applied')
+    expect((await bridge.rpc('draft_get', { draft_id: draftB })).result!.status).toBe('drafted')
+    expect(bridge.writes().map(l => l.draft_id)).toEqual([draftA])
+    const decisions = approvals().filter(l => l.event === 'decision').map(l => [l.session_id, l.draft_id, l.decision])
+    expect(decisions).toEqual(expect.arrayContaining([
+      [String(h.session.id), draftA, 'allowed'], [String(sessionB.id), draftB, 'rejected']]))
+  })
+
+  it('the audit never carries a model-supplied key or an error message', async () => {
+    const h = await setup('ask', 'allowed-once')
+    const prose = 'Douleur du LTFA droit, Ottawa négatif, patient anxieux'
+    const refused = await h.run('record_apply', { draft_id: prose })
+    expect(textOf(refused)).toContain(ScribeApproval.REFUSAL)
+    const first = approvals()[0]!
+    expect(first).toMatchObject({ decision: 'refused-before-ask', key_valid: false, error_code: 404, status: 404 })
+    expect(first.key_digest).toMatch(/^[0-9a-f]{16}$/)
+    expect(first).not.toHaveProperty('key')
+    // A bridge-shaped id is kept verbatim (it is an id, not prose).
+    await h.run('record_apply', { draft_id: 'drf-0123456789abcdef' })
+    expect(approvals()[1]).toMatchObject({ key: 'drf-0123456789abcdef' })
+    // relay failure: code, never the message.
+    const draftId = await draft(h.run)
+    process.env[APPROVER_ENV] = 'wrong-approver-token'
+    await h.run('record_apply', { draft_id: draftId })
+    process.env[APPROVER_ENV] = APPROVER_TOKEN
+    expect(approvals()[2]).toMatchObject({ decision: 'relay-failed', error_code: 401 })
+    // write failure after a grant (section changed by an earlier draft): status, never the message.
+    const d1 = await draft(h.run)
+    const d2 = await draft(h.run)
+    expect((await h.run('record_apply', { draft_id: d1 })).isError).toBe(false)
+    expect((await h.run('record_apply', { draft_id: d2 })).isError).toBe(true)
+    const last = approvals().at(-1)!
+    expect(last).toMatchObject({ event: 'result', ok: false, status: 409 })
+    expect(last.error_code).toEqual(expect.any(String))
+    const raw = readFileSync(auditPath, 'utf8')
+    expect(raw).not.toContain('LTFA')
+    expect(raw).not.toContain('Ottawa')
+    expect(raw).not.toContain('"error":')
+    expect(raw).not.toContain('inconnu')
+  })
+
+  it('claims a verified patient binding only when every quote was verified', () => {
+    const base: ScribeApproval.Draft = {
+      draft_id: 'drf-1', kind: 'edit', status: 'drafted', patient_id: 'pat-001', encounter_id: 'enc-001-urg', item_id: ITEM,
+      attribute: 'physical-exam-text', mode: 'append', new_text: 'x', rationale: 'r',
+      quotes: [{ dictation_id: 'dict-1', offset: 0, text: 'q', verified: true }], quotes_verified: true,
+      base_digest: 'b', base_text: 'a', final_text: 'a\nx', final_text_digest: 'f', backup_id: null,
+    }
+    expect(ScribeApproval.approvalPrompt('record_apply', base, undefined))
+      .toContain('Dictée : dict-1 (patient de la dictée = patient du brouillon, vérifié par le pont)')
+    const old = { ...base, quotes_verified: false, quotes: [{ ...base.quotes[0]!, verified: false }] }
+    const prompt = ScribeApproval.approvalPrompt('record_apply', old, undefined)
+    expect(prompt).toContain('Dictée : dict-1 (Citations NON VÉRIFIÉES par le pont)')
+    expect(prompt).not.toContain('vérifié par le pont')
+    expect(prompt).toContain('NON VÉRIFIÉE)')
+  })
+
+  it('audit keys: bridge ids verbatim, anything else as a digest', () => {
+    expect(ScribeApproval.auditKey('drf-0a1b')).toEqual({ key: 'drf-0a1b' })
+    expect(ScribeApproval.auditKey('bak-1f19a001-physical-exam-text-ab12')).toEqual({ key: 'bak-1f19a001-physical-exam-text-ab12' })
+    for (const bad of ['drf-', 'drf-a b', 'Le patient a mal', `drf-${'a'.repeat(81)}`, 'backup_1f19a001_x.json']) {
+      expect(ScribeApproval.auditKey(bad)).toMatchObject({ key_valid: false })
+    }
+    expect(ScribeApproval.callKey('s1', 'call_1')).not.toBe(ScribeApproval.callKey('s2', 'call_1'))
+  })
+
   it('renders a line diff', () => {
     expect(ScribeApproval.lineDiff('a\nb', 'a\nc\nb')).toEqual(['  a', '+ c', '  b'])
     expect(ScribeApproval.lineDiff('', 'x')).toEqual(['+ x'])
