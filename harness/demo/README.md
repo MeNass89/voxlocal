@@ -31,12 +31,12 @@ Chaque exécution travaille dans un dossier temporaire neuf (journaux, audit, br
 | Étape | Processus | Port |
 |---|---|---|
 | 1 | API agent VoxLocal en `--mock` (`agent/voxlocal_agent_api.py`) : la source de dictées quand aucun iPhone n’est dans la salle | 47366 |
-| 2 | `harness/ingest/dictation_feeder.py --once --backend dryrun --seed-file … --patient-context pat-001` : déclare le patient, injecte la dictée, la livre une fois (le texte du fichier est remis en prose, comme VoxLocal la livre) | — |
-| 3 | Pont portail `--backend mock` avec ses deux jetons, aléatoires à chaque exécution ; il vérifie chaque citation contre la dictée livrée (même identifiant, même patient, même rencontre) | 47368 |
+| 2 | `harness/ingest/dictation_feeder.py --once --backend dryrun --seed-file … --patient-context "patient=pat-001 rencontre=enc-001-urg"` : déclare le patient et la rencontre, injecte la dictée, la livre une fois (le texte du fichier est remis en prose, comme VoxLocal la livre) | — |
+| 3 | Pont portail `--backend mock` avec ses deux jetons, aléatoires à chaque exécution ; il lit la dictée livrée sur l’API agent (`GET /v1/dictations/<id>`, `VOXLOCAL_API_URL` + `VOXLOCAL_API_TOKEN`) et vérifie chaque citation contre elle (même identifiant, même patient, même rencontre). `--dictation-source file` lui remet plutôt une copie `dictation-<id>.json` | 47368 |
 | 4 | Le modèle (voir ci-dessous) | 47381 |
 | 5 | `dsh` web, profil `scribe`, Harness home dans le dossier temporaire (aucune session des démos précédentes) | 3081 |
 
-Options : `--provider scripted|local|pod`, `--seed-dictation FICHIER`, `--patient ID`, `--encounter ID`, `--port N` (web). `SCRIPTED_DELAY` règle la pause du modèle scripté avant chaque réponse (1,5 s par défaut, pour que la salle voie les étapes).
+Options : `--provider scripted|local|pod`, `--seed-dictation FICHIER`, `--patient ID`, `--encounter ID`, `--dictation-source api|file`, `--port N` (web). Aucun jeton ne passe en argument de processus : `curl` lit l’en-tête sur son entrée (`-K -`), `drive-ui.mjs` lit `DSH_WEB_TOKEN`. `--provider pod` refuse une URL HTTP distante, comme `run-web.sh`. `SCRIPTED_DELAY` règle la pause du modèle scripté avant chaque réponse (1,5 s par défaut, pour que la salle voie les étapes).
 
 ## Le modèle : `--provider`
 
