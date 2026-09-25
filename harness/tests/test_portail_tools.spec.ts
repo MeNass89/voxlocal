@@ -220,6 +220,7 @@ describe('portail-tools against the real Python bridge (mock backend)', () => {
         PORTAIL_BRIDGE_DRAFTS: join(dir, 'drafts.jsonl'),
         PORTAIL_BRIDGE_AUDIT: join(dir, 'audit.jsonl'),
         PORTAIL_BRIDGE_STATE_DIR: join(dir, 'state'),
+        PYTHONUNBUFFERED: '1',
       },
       stdio: ['ignore', 'ignore', 'pipe'],
     })
@@ -234,7 +235,7 @@ describe('portail-tools against the real Python bridge (mock backend)', () => {
     })
     process.env[TOKEN_ENV] = TOOL_TOKEN
     tools = await mount({ bridgeUrl: url, tokenEnv: TOKEN_ENV, timeoutMs: 5_000 })
-  })
+  }, 60_000) // a cold python3 on a CI runner can take well over vitest's 10 s hook default
   afterAll(() => {
     proc?.kill()
     delete process.env[TOKEN_ENV]
