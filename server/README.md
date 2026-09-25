@@ -21,6 +21,37 @@ py server\voxlocal_server.py --mock --insecure-test-only --host 127.0.0.1 --pair
 Le serveur renvoie une réponse de contrôle et n’appelle aucun modèle. Le code
 d’appairage reste obligatoire, même pour ce test.
 
+## Identité TLS de l’hôte
+
+Le serveur refuse de démarrer sans TLS hors mode mock. Générez une fois
+l’identité de l’hôte (RSA 2048 auto-signé, 10 ans, SAN `<hôte>.local`,
+`localhost`, `127.0.0.1`, comme VoxLocal.app) :
+
+```bash
+# macOS / Linux : dossier en 0700, clé en 0600 ; sans --force, une identité existante est conservée
+scripts/make-tls-identity.sh ~/.voxlocal/tls
+```
+
+```powershell
+# Windows : openssl.exe du PATH, de Git for Windows ou de $env:OPENSSL_EXE ;
+# la clé n’est lisible que par le compte courant
+.\windows\new-tls-identity.ps1 -OutputDir C:\ProgramData\VoxLocal\tls
+```
+
+Les deux scripts écrivent `server.cert.pem` et `server.key.pem`, puis affichent
+l’empreinte SHA-256 du certificat en base64 et en hexadécimal groupé par 4. Au
+démarrage, le serveur journalise la même valeur
+(`server_ready … tls_fingerprint_sha256=<base64>`) et la publie dans
+l’enregistrement Bonjour (`tls=1`, `fp=<base64>`). À la première connexion,
+l’iPhone affiche l’empreinte : comparez-la, caractère par caractère, avec celle
+du script ou du journal avant de l’approuver. Une empreinte qui change ensuite
+signifie un nouveau certificat (régénéré avec `--force`/`-Force`) ou un
+intermédiaire sur le réseau ; ne l’approuvez qu’après vérification sur l’hôte.
+
+Un certificat émis par l’IT de l’hôpital reste possible : passez-le avec
+`--tls-cert`/`--tls-key` ; l’empreinte publiée est celle du premier certificat
+du fichier PEM.
+
 ## GPU privé compatible OpenAI
 
 Le serveur refuse un endpoint GPU non HTTPS, un démarrage sans TLS serveur et
@@ -33,8 +64,8 @@ $env:VOXLOCAL_LLM_TOKEN = "..." # seulement si l’endpoint LLM est différent
 py server\voxlocal_server.py `
   --host 10.42.5.20 `
   --backend-url https://gpu-interne.example `
-  --tls-cert C:\VoxLocal\certs\server.pem `
-  --tls-key C:\VoxLocal\certs\server-key.pem `
+  --tls-cert C:\ProgramData\VoxLocal\tls\server.cert.pem `
+  --tls-key C:\ProgramData\VoxLocal\tls\server.key.pem `
   --llm-url https://gpu-interne.example `
   --whisper-model large-v3
 ```
@@ -46,9 +77,10 @@ L’engagement ZDR, la région, les journaux du fournisseur et le DPA doivent ê
 vérifiés séparément : un header ne constitue pas une preuve de conformité.
 
 `--tls-client-ca` active la demande d’un certificat client mTLS. Sans cette
-option, TLS protège le transport mais l’appairage reste le contrôle applicatif.
-Le pinning côté iOS, l’enrôlement/révocation d’appareils et la validation DPO
-sont des critères du pilote avant toute donnée patient.
+option, TLS protège le transport, l’empreinte comparée sur l’iPhone authentifie
+l’hôte et l’appairage reste le contrôle applicatif. L’enrôlement/révocation
+d’appareils et la validation DPO sont des critères du pilote avant toute donnée
+patient.
 
 ## Pare-feu et découverte
 

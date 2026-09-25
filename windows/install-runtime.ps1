@@ -11,6 +11,7 @@ param(
     [ValidateRange(1, 65535)] [int]$AgentPort = 47366,
     [string]$TlsCert,
     [string]$TlsKey,
+    [string]$TlsDir,
     [string]$TlsClientCA,
     [string]$GpuCAFile,
     [switch]$Force
@@ -50,6 +51,10 @@ $targetFull = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
 if ($targetFull -eq $sourceFull -or $targetFull.StartsWith($sourceFull + '\', [StringComparison]::OrdinalIgnoreCase)) {
     throw '-InstallRoot must be outside the source checkout; refusing a recursive self-copy.'
 }
+if ($TlsDir -and ($TlsCert -or $TlsKey)) { throw 'Pass either -TlsDir (generated identity) or -TlsCert/-TlsKey (provided certificate), not both.' }
+if ($RegisterScheduledTask -and $ScheduledTask -eq 'Server' -and -not $MockTask -and -not $TlsCert -and -not $TlsDir) {
+    throw 'A production server task requires -TlsDir (VoxLocal generates and keeps the identity there) or -TlsCert/-TlsKey.'
+}
 $python = Resolve-Python311 $PythonPath
 $existingManifest = Join-Path $targetFull 'windows-runtime.manifest.json'
 if ((Test-Path -LiteralPath $targetFull) -and -not (Test-Path -LiteralPath $existingManifest) -and ((Get-ChildItem -LiteralPath $targetFull -Force | Measure-Object).Count -gt 0) -and -not $Force) {
@@ -80,6 +85,16 @@ if ($LASTEXITCODE -ne 0) {
 & $venvPython -c 'import agent.voxlocal_agent_api; print("agent import ok")'
 if ($LASTEXITCODE -ne 0) { throw 'Installed agent package could not be imported from the new venv.' }
 
+$tlsFingerprint = $null
+if ($TlsDir) {
+    # Generates server.cert.pem/server.key.pem once (reused on later installs) and returns the pinned fingerprint.
+    $identity = & (Join-Path $PSScriptRoot 'new-tls-identity.ps1') -OutputDir $TlsDir
+    $TlsCert = $identity.CertPath
+    $TlsKey = $identity.KeyPath
+    $tlsFingerprint = $identity.FingerprintBase64
+    Write-Host "Compare this fingerprint with the one the iPhone shows at first connection: $($identity.FingerprintDisplay)"
+}
+
 $taskNames = @()
 if ($RegisterScheduledTask) {
     if (-not $ScheduledTask) { throw '-ScheduledTask Agent or -ScheduledTask Server is required with -RegisterScheduledTask.' }
@@ -104,7 +119,7 @@ if ($RegisterScheduledTask) {
     Write-Warning 'Scheduled Task runs only at interactive logon and is not a Windows Service. Configure secret injection for that account; no token is stored in the task action.'
 }
 
-$manifest = [ordered]@{ schema = 1; installRoot = $targetFull; source = $sourceFull; venv = $venv; scheduledTasks = $taskNames; installedUtc = [DateTime]::UtcNow.ToString('o') }
+$manifest = [ordered]@{ schema = 1; installRoot = $targetFull; source = $sourceFull; venv = $venv; scheduledTasks = $taskNames; tlsFingerprintSha256 = $tlsFingerprint; installedUtc = [DateTime]::UtcNow.ToString('o') }
 $manifestPath = Join-Path $targetFull 'windows-runtime.manifest.json'
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 Write-Host "VoxLocal runtime installed at $targetFull. Secrets were not written by this script."

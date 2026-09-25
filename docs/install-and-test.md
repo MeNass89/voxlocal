@@ -88,17 +88,28 @@ OpenAI. Le serveur utilise :
 - `VOXLOCAL_GPU_URL`, `VOXLOCAL_GPU_TOKEN`, et éventuellement
   `VOXLOCAL_LLM_URL` / `VOXLOCAL_LLM_TOKEN` pour la configuration.
 
-Exemple Windows :
+Exemple Windows : l’installateur génère l’identité TLS dans `-TlsDir` et
+enregistre la tâche serveur (lancée à l’ouverture de session) ; pour démarrer à
+la main, `run-windows.ps1` lit les secrets dans l’environnement :
 
 ```powershell
+.\windows\install-runtime.ps1 `
+  -RegisterScheduledTask -ScheduledTask Server `
+  -BindAddress 10.42.5.20 `
+  -TlsDir C:\ProgramData\VoxLocal\tls
 $env:VOXLOCAL_PAIRING_CODE = "secret-de-pilote-12-caracteres"
 $env:VOXLOCAL_GPU_URL = "https://gpu.interne.example"
 $env:VOXLOCAL_GPU_TOKEN = "..."
 .\server\run-windows.ps1 `
   -BindAddress 10.42.5.20 `
-  -TlsCert C:\VoxLocal\certs\server.pem `
-  -TlsKey C:\VoxLocal\certs\server-key.pem
+  -TlsCert C:\ProgramData\VoxLocal\tls\server.cert.pem `
+  -TlsKey C:\ProgramData\VoxLocal\tls\server.key.pem
 ```
+
+L’installateur affiche l’empreinte SHA-256 du certificat ; la comparer avec
+celle que l’iPhone montre à la première connexion. Sur macOS ou Linux,
+`scripts/make-tls-identity.sh <dossier>` produit la même identité. Détails dans
+[`windows-deployment.md`](windows-deployment.md).
 
 Le fournisseur doit fournir la région de traitement, le DPA, la garantie ZDR,
 la désactivation de l’entraînement et la politique de journaux avant toute
