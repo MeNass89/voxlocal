@@ -1,0 +1,11 @@
+# Build context for cloud/runpod/Dockerfile (docker build ... <repo root>).
+# The image only copies cloud/runpod; everything heavy or private stays out.
+.git
+**/.build
+**/node_modules
+mac/VoxLocal/Vendor
+website
+docs/superpowers
+dist
+*.dmg
+*.zip

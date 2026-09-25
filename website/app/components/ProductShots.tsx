@@ -23,12 +23,21 @@ const shots: Shot[] = [
   },
   {
     name: "ios-home",
-    alt: "Écran d’accueil de Remote Scribe sur iPhone : recherche du poste sur le réseau local et bouton Démarrer la dictée.",
+    alt: "Écran d’accueil de Remote Scribe sur iPhone : poste connecté en chiffré, état Prêt et bouton Démarrer la dictée.",
     width: 644,
     height: 1400,
     title: "Remote Scribe sur iPhone",
-    caption: "L’iPhone cherche le poste sur le Wi-Fi du service, puis devient son microphone. Le texte revient sur le poste.",
+    caption: "L’iPhone trouve le poste sur le Wi-Fi du service et s’y connecte en chiffré, puis devient son microphone. Le texte revient sur le poste.",
     frame: "phone",
+  },
+  {
+    name: "mac-remote-scribe",
+    alt: "Écran iPhone de VoxLocal sur macOS : QR code et code d’appairage, empreinte TLS, appareils connectés et dernières dictées reçues.",
+    width: 1600,
+    height: 1037,
+    title: "Appairer l’iPhone au poste",
+    caption: "Un QR code transmet le code d’appairage et l’empreinte TLS du poste. Les dictées reçues de l’iPhone ou de l’iPad s’affichent ici.",
+    frame: "window",
   },
 ];
 

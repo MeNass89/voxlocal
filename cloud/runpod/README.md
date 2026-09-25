@@ -13,6 +13,7 @@ One image, one command, one exposed port. Full guide (French):
 | `benchmark.py` | synthetic benchmark (`--iterations`, p50/p95, tokens/s); JSON schema in its docstring |
 | `bench-report.py` | renders the benchmark JSON as a Markdown table |
 | `check-services.py` | readiness probe of `/v1/models` |
+| `wait-ready.sh` | holds the edge until `whisper-server` and `llama-server` answer `/health` (60 s by default, `VOXLOCAL_READY_TIMEOUT`) |
 | `runtime.env.example` | placeholder commands for an image that is not this one |
 
 ```bash
