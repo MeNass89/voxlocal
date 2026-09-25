@@ -47,7 +47,7 @@ class RealHostInteropTests(unittest.TestCase):
     def test_ios_client_completes_two_sessions_against_real_host(self):
         port = free_port()
         with tempfile.TemporaryDirectory() as sessions, tempfile.TemporaryFile() as log:
-            host = subprocess.Popen([str(self.host), "--backend", "voxlocal", "--pairing-code", "test-code", "--port", str(port), "--sessions", sessions],
+            host = subprocess.Popen([str(self.host), "--backend", "voxlocal", "--pairing-code", "test-code", "--insecure-plaintext", "--port", str(port), "--sessions", sessions],
                                     stdout=log, stderr=subprocess.STDOUT)
             try:
                 deadline = time.monotonic() + 15

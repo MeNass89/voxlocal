@@ -32,6 +32,9 @@ final class AppState: ObservableObject {
     @Published var remoteScribeStatus = "Démarrage…"
     @Published var remoteScribeEnabled = true
     @Published var remoteBackend: RemoteBackendKind = .voxLocal
+    /// Display form ("ABCD-2345"); `remoteScribe.pairingCode` is the dashless wire value.
+    @Published var remotePairingCode = ""
+    @Published var remoteTLSFingerprint: String?
     @Published var cloudToken = ""
     @Published var cloudTestRunning = false
     @Published var cloudTestMessage: String?
@@ -70,6 +73,11 @@ final class AppState: ObservableObject {
         remoteScribe.onStatus = { [weak self] message in self?.remoteScribeStatus = message }
         remoteScribe.onBackendChanged = { [weak self] backend in self?.remoteBackend = backend }
         remoteScribe.onHistoryChanged = { [weak self] in self?.reloadHistory() }
+        remoteScribe.onSecurityChanged = { [weak self] in
+            guard let self else { return }
+            self.remotePairingCode = self.remoteScribe.pairingCodeDisplay
+            self.remoteTLSFingerprint = self.remoteScribe.tlsFingerprintDisplay
+        }
         remoteBackend = remoteScribe.defaultBackend
         remoteScribe.start()
     }
@@ -146,6 +154,8 @@ final class AppState: ObservableObject {
     func reprocess(_ record: DictationRecord) { pipeline.reprocess(record) }
     func setRemoteScribeEnabled(_ enabled: Bool) { remoteScribeEnabled = enabled; enabled ? remoteScribe.start() : remoteScribe.stop() }
     func setRemoteBackend(_ backend: RemoteBackendKind) { remoteScribe.setDefaultBackend(backend) }
+    func copyRemotePairingCode() { if PlatformServices.copy(remoteScribe.pairingCode) { notice = "Code d’appairage copié." } }
+    func regenerateRemotePairingCode() { remoteScribe.regeneratePairingCode() }
     func show(_ section: Section) { selection = section; NSApp.activate(ignoringOtherApps: true); NSApp.windows.first(where: { !($0 is NSPanel) })?.makeKeyAndOrderFront(nil) }
 
     func createMode() { do { let mode = try modeRepository.create(); reloadModes(); selectedModeID = mode.id } catch { notice = error.localizedDescription } }

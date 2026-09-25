@@ -8,26 +8,32 @@ public final class RemoteSessionHandler {
     private let serverName: String
     private let sessionsDirectory: URL
     private let pairingCode: String?
+    private let pairingGate: RemotePairingGate?
+    private let peer: String
     private let sender: Sender
     private var pairedDeviceName: String?
     private var receiver: RemoteAudioReceiver?
     private var activeBackend: RemoteScribeBackend?
 
-    public init(backend: RemoteScribeBackend, serverName: String, sessionsDirectory: URL, pairingCode: String? = nil, sender: @escaping Sender) {
+    public init(backend: RemoteScribeBackend, serverName: String, sessionsDirectory: URL, pairingCode: String? = nil, pairingGate: RemotePairingGate? = nil, peer: String = "", sender: @escaping Sender) {
         self.backends = [backend.kind: backend]
         self.defaultBackend = backend.kind
         self.serverName = serverName
         self.sessionsDirectory = sessionsDirectory
         self.pairingCode = pairingCode
+        self.pairingGate = pairingGate
+        self.peer = peer
         self.sender = sender
     }
 
-    public init(backends: [RemoteBackendKind: RemoteScribeBackend], defaultBackend: RemoteBackendKind, serverName: String, sessionsDirectory: URL, pairingCode: String? = nil, sender: @escaping Sender) {
+    public init(backends: [RemoteBackendKind: RemoteScribeBackend], defaultBackend: RemoteBackendKind, serverName: String, sessionsDirectory: URL, pairingCode: String? = nil, pairingGate: RemotePairingGate? = nil, peer: String = "", sender: @escaping Sender) {
         self.backends = backends
         self.defaultBackend = defaultBackend
         self.serverName = serverName
         self.sessionsDirectory = sessionsDirectory
         self.pairingCode = pairingCode
+        self.pairingGate = pairingGate
+        self.peer = peer
         self.sender = sender
     }
 
@@ -58,8 +64,15 @@ public final class RemoteSessionHandler {
         guard request.protocolVersion == RemoteScribeProtocol.version else {
             throw RemoteScribeError.protocolViolation("version \(request.protocolVersion) non prise en charge")
         }
-        guard pairingCode == nil || pairingCode == request.pairingCode else {
-            throw RemoteScribeError.protocolViolation("code d’appairage incorrect")
+        if pairingGate?.isLocked(peer: peer) == true {
+            throw RemoteScribeError.protocolViolation("trop de tentatives d’appairage, réessayez dans une minute")
+        }
+        if let pairingCode {
+            guard Self.constantTimeEquals(pairingCode, request.pairingCode) else {
+                pairingGate?.recordFailure(peer: peer)
+                throw RemoteScribeError.protocolViolation("code d’appairage incorrect")
+            }
+            pairingGate?.recordSuccess(peer: peer)
         }
         pairedDeviceName = request.deviceName
         let available = RemoteBackendKind.allCases.filter { backends[$0] != nil }
@@ -70,6 +83,20 @@ public final class RemoteSessionHandler {
             availableBackends: available
         )))
         sendStatus(.ready, backend: defaultBackend, sessionID: RemoteFrame.noSession, message: "Appareil appairé.")
+    }
+
+    /// Compares the expected code with the offered one without an early exit, so the
+    /// time spent does not reveal how many leading bytes matched. A missing or
+    /// different-length code still walks the full expected buffer and returns false.
+    static func constantTimeEquals(_ expected: String, _ offered: String?) -> Bool {
+        let lhs = Array(expected.utf8)
+        let rhs = Array((offered ?? "").utf8)
+        var difference: UInt8 = (offered == nil || lhs.count != rhs.count) ? 1 : 0
+        for index in 0..<lhs.count {
+            let other: UInt8 = index < rhs.count ? rhs[index] : 0
+            difference |= lhs[index] ^ other
+        }
+        return difference == 0
     }
 
     private func start(_ frame: RemoteFrame) throws {

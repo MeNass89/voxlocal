@@ -86,6 +86,99 @@ import Testing
     #expect(statuses.allSatisfy { $0.backend == .voxLocal })
 }
 
+@Test func tlsIdentityIsGeneratedAndStable() throws {
+    guard FileManager.default.isExecutableFile(atPath: "/usr/bin/openssl") else { return }
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let directory = root.appendingPathComponent("tls", isDirectory: true)
+    let first = try RemoteScribeTLSIdentity.loadOrCreate(in: directory, hostname: "Mac de Clément")
+    let second = try RemoteScribeTLSIdentity.loadOrCreate(in: directory, hostname: "Mac de Clément")
+    #expect(first.certificateDER == second.certificateDER)
+    #expect(first.fingerprintSHA256 == second.fingerprintSHA256)
+    #expect(first.fingerprintSHA256.count == 32)
+    #expect(Data(base64Encoded: first.fingerprintBase64) == first.fingerprintSHA256)
+    let groups = first.fingerprintDisplay.split(separator: " ")
+    #expect(groups.count == 16)
+    #expect(groups.allSatisfy { $0.count == 4 && $0.allSatisfy { "0123456789ABCDEF".contains($0) } })
+    let keyMode = try FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent("server.key.pem").path)[.posixPermissions] as? NSNumber
+    let directoryMode = try FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions] as? NSNumber
+    #expect(keyMode?.intValue == 0o600)
+    #expect(directoryMode?.intValue == 0o700)
+    // No transient PKCS#12 may survive a load.
+    let leftovers = try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasSuffix(".p12") }
+    #expect(leftovers.isEmpty)
+    let tempLeftovers = (try? FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)) ?? []
+    #expect(!tempLeftovers.contains { $0.hasPrefix("remotescribe-identity-") })
+}
+
+@Test func pairingGateLocksAfterFiveFailures() {
+    var clock = Date(timeIntervalSince1970: 1_000)
+    let gate = RemotePairingGate(maxFailures: 5, window: 600, lockout: 60, now: { clock })
+    for _ in 0..<4 { gate.recordFailure(peer: "a") }
+    #expect(!gate.isLocked(peer: "a"))
+    gate.recordFailure(peer: "a")
+    #expect(gate.isLocked(peer: "a"))
+    #expect(!gate.isLocked(peer: "b"))
+    clock += 59
+    #expect(gate.isLocked(peer: "a"))
+    clock += 2
+    #expect(!gate.isLocked(peer: "a"))
+
+    // Failures outside the sliding window do not accumulate.
+    for _ in 0..<4 { gate.recordFailure(peer: "c") }
+    clock += 601
+    gate.recordFailure(peer: "c")
+    #expect(!gate.isLocked(peer: "c"))
+
+    // A success clears the counter.
+    for _ in 0..<4 { gate.recordFailure(peer: "d") }
+    gate.recordSuccess(peer: "d")
+    gate.recordFailure(peer: "d")
+    #expect(!gate.isLocked(peer: "d"))
+}
+
+@Test func pairLockedPeerIsRefused() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var clock = Date(timeIntervalSince1970: 1_000)
+    let gate = RemotePairingGate(now: { clock })
+    func handler(peer: String, into replies: @escaping (RemoteFrame) -> Void) -> RemoteSessionHandler {
+        RemoteSessionHandler(backend: VoxLocalBackend(), serverName: "test", sessionsDirectory: root, pairingCode: "ABCD2345", pairingGate: gate, peer: peer, sender: replies)
+    }
+    var attacker: [RemoteFrame] = []
+    let wrong = handler(peer: "x") { attacker.append($0) }
+    for _ in 0..<5 { wrong.handle(try .json(kind: .pair, value: PairRequest(deviceID: "id", deviceName: "phone", pairingCode: "WRONG999"))) }
+    #expect(attacker.filter { $0.kind == .error }.count == 5)
+    #expect(gate.isLocked(peer: "x"))
+
+    // The sixth attempt from the locked peer is refused even with the right code.
+    attacker.removeAll()
+    let retry = handler(peer: "x") { attacker.append($0) }
+    retry.handle(try .json(kind: .pair, value: PairRequest(deviceID: "id", deviceName: "phone", pairingCode: "ABCD2345")))
+    let refusal = try #require(attacker.first { $0.kind == .error }).decode(RemoteErrorPayload.self)
+    #expect(refusal.message.contains("trop de tentatives"))
+    #expect(!attacker.contains { $0.kind == .pair })
+
+    // Another peer still pairs while "x" is locked.
+    var other: [RemoteFrame] = []
+    handler(peer: "y") { other.append($0) }.handle(try .json(kind: .pair, value: PairRequest(deviceID: "id2", deviceName: "tablet", pairingCode: "ABCD2345")))
+    #expect(other.contains { $0.kind == .pair })
+    #expect(!other.contains { $0.kind == .error })
+
+    // A missing or shorter code is rejected, not accepted.
+    var missing: [RemoteFrame] = []
+    handler(peer: "z") { missing.append($0) }.handle(try .json(kind: .pair, value: PairRequest(deviceID: "id3", deviceName: "phone")))
+    handler(peer: "z") { missing.append($0) }.handle(try .json(kind: .pair, value: PairRequest(deviceID: "id3", deviceName: "phone", pairingCode: "ABCD")))
+    #expect(missing.filter { $0.kind == .error }.count == 2)
+    #expect(!missing.contains { $0.kind == .pair })
+
+    // After the lockout the right code pairs again.
+    clock += 61
+    var later: [RemoteFrame] = []
+    handler(peer: "x") { later.append($0) }.handle(try .json(kind: .pair, value: PairRequest(deviceID: "id", deviceName: "phone", pairingCode: "ABCD2345")))
+    #expect(later.contains { $0.kind == .pair })
+}
+
 private final class ImmediateBackend: RemoteScribeBackend {
     let kind: RemoteBackendKind
     init(kind: RemoteBackendKind) { self.kind = kind }

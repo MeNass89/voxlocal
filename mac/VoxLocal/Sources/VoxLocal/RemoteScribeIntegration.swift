@@ -158,12 +158,20 @@ final class VoxLocalRemoteServerController {
     var onStatus: ((String) -> Void)?
     var onHistoryChanged: (() -> Void)?
     var onBackendChanged: ((RemoteBackendKind) -> Void)?
+    /// Fired when the pairing code or the TLS fingerprint changes.
+    var onSecurityChanged: (() -> Void)?
     private let backend: VoxLocalRemoteBackend
     private let superwhisperBackend: SuperwhisperRemoteBackend?
     private let paths: AppPaths
     private var server: RemoteScribeServer?
     private(set) var running = false
     private(set) var defaultBackend: RemoteBackendKind
+    private var tlsIdentity: RemoteScribeTLSIdentity?
+    /// Dashless wire value; the UI shows `pairingCodeDisplay` and copies this one.
+    private(set) var pairingCode = ""
+    var pairingCodeDisplay: String { PlatformServices.displayPairingCode(pairingCode) }
+    var tlsFingerprintDisplay: String? { tlsIdentity?.fingerprintDisplay }
+    private var tlsDirectory: URL { paths.root.appendingPathComponent("remote-scribe/tls", isDirectory: true) }
 
     var availableBackends: [RemoteBackendKind] {
         SuperwhisperRemoteBackend.isInstalled ? [.voxLocal, .superwhisper] : [.voxLocal]
@@ -183,15 +191,50 @@ final class VoxLocalRemoteServerController {
 
     func start() {
         guard !running else { return }
+        loadPairingCode()
+        // Never fall back to a plaintext listener: without an identity the phone
+        // could not verify this Mac, so the server stays off.
+        if tlsIdentity == nil {
+            do {
+                tlsIdentity = try RemoteScribeTLSIdentity.loadOrCreate(in: tlsDirectory, hostname: Host.current().localizedName ?? "voxlocal")
+                onSecurityChanged?()
+            } catch {
+                onStatus?("TLS indisponible : \(error.localizedDescription)")
+                return
+            }
+        }
         var backends: [RemoteScribeBackend] = [backend]
         if let superwhisperBackend { backends.append(superwhisperBackend) }
-        let instance = RemoteScribeServer(backends: backends, defaultBackend: defaultBackend, serviceName: Host.current().localizedName ?? "VoxLocal", sessionsDirectory: paths.remoteSessions)
+        let instance = RemoteScribeServer(backends: backends, defaultBackend: defaultBackend, serviceName: Host.current().localizedName ?? "VoxLocal", sessionsDirectory: paths.remoteSessions, pairingCode: pairingCode, tlsIdentity: tlsIdentity)
         instance.onEvent = { [weak self] message in self?.onStatus?(message) }
         do { try instance.start(); server = instance; running = true; onStatus?("Remote Scribe actif · \(displayName(defaultBackend)).") }
         catch { onStatus?("Remote Scribe indisponible : \(error.localizedDescription)") }
     }
 
     func stop() { server?.stop(); server = nil; running = false; onStatus?("Remote Scribe arrêté.") }
+
+    /// Issues a new code, stores it in the Keychain and restarts the listener so
+    /// devices paired with the old code must pair again.
+    func regeneratePairingCode() {
+        let code = PlatformServices.generatePairingCode()
+        do { try PlatformServices.setRemotePairingCode(code) }
+        catch { onStatus?("\(error.localizedDescription) Le nouveau code reste valable jusqu’à la fermeture de VoxLocal.") }
+        pairingCode = code
+        onSecurityChanged?()
+        if running { stop(); start() }
+    }
+
+    private func loadPairingCode() {
+        guard pairingCode.isEmpty else { return }
+        if let stored = PlatformServices.remotePairingCode() {
+            pairingCode = stored
+        } else {
+            pairingCode = PlatformServices.generatePairingCode()
+            do { try PlatformServices.setRemotePairingCode(pairingCode) }
+            catch { onStatus?("\(error.localizedDescription) Le code affiché reste valable jusqu’à la fermeture de VoxLocal.") }
+        }
+        onSecurityChanged?()
+    }
 
     func setDefaultBackend(_ backend: RemoteBackendKind) {
         guard availableBackends.contains(backend) else { onStatus?("SuperWhisper n’est pas installé sur ce Mac."); return }
