@@ -40,6 +40,8 @@ die() { echo "voxlocal-entrypoint: $*" >&2; exit 2; }
 [[ "$WHISPER_LANGUAGE" =~ ^([a-z]{2,3}|auto)$ ]] || die "WHISPER_LANGUAGE must be an ISO code such as fr, or auto"
 [[ "$LLM_ENABLED" == on || "$LLM_ENABLED" == off ]] || die "VOXLOCAL_LLM must be on or off"
 [[ "$EDGE_PORT" =~ ^[0-9]{2,5}$ ]] || die "VOXLOCAL_EDGE_PORT must be a port number"
+READY_TIMEOUT="${VOXLOCAL_READY_TIMEOUT:-60}"
+[[ "$READY_TIMEOUT" =~ ^[0-9]{1,4}$ ]] || die "VOXLOCAL_READY_TIMEOUT must be a whole number of seconds"
 
 umask 077
 mkdir -p "$ROOT_DIR" "$RUN_DIR" "$TLS_DIR"
@@ -211,6 +213,18 @@ cat >"$RUN_DIR/Caddyfile" <<'CADDYFILE'
 			reverse_proxy 127.0.0.1:8001
 		}
 
+		# VOXLOCAL_LLM=off: no llama-server behind the edge, so the LLM routes
+		# answer a JSON 404 instead of a 502 from an empty upstream.
+		@llm_off {
+			path /llm/* /v1/chat/completions
+			expression `{env.VOXLOCAL_LLM_ENABLED} == "off"`
+		}
+		handle @llm_off {
+			header Content-Type application/json
+			header Cache-Control no-store
+			respond `{"error":{"message":"LLM disabled on this runtime (VOXLOCAL_LLM=off)","type":"not_found","code":404}}` 404
+		}
+
 		@llm {
 			path /llm/v1/models /llm/v1/chat/completions
 		}
@@ -284,7 +298,18 @@ if [[ "$LLM_ENABLED" == on ]]; then
 else
   unset VOXLOCAL_LLM_CMD
 fi
-export VOXLOCAL_EDGE_CMD="caddy run --config $caddyfile_path --adapter caddyfile"
+if [[ -n "${VOXLOCAL_LLM_CMD:-}" ]]; then
+  export VOXLOCAL_LLM_ENABLED=on
+else
+  export VOXLOCAL_LLM_ENABLED=off
+fi
+# The edge waits (up to 60 s) for the model servers to answer /health, so the
+# first request after boot does not meet a 502 while a model is still loading.
+# whisper-server serves /health under its --request-path.
+health_urls="http://127.0.0.1:8001/v1/audio/transcriptions/health"
+[[ "$VOXLOCAL_LLM_ENABLED" == off ]] || health_urls+=" http://127.0.0.1:8003/health"
+printf -v wait_path '%q' "$ROOT_DIR/wait-ready.sh"
+export VOXLOCAL_EDGE_CMD="bash $wait_path $READY_TIMEOUT $health_urls && exec caddy run --config $caddyfile_path --adapter caddyfile"
 export VOXLOCAL_ROOT="$ROOT_DIR" VOXLOCAL_TOKEN_FILE="$TOKEN_FILE"
 
 log "starting services; edge on :$EDGE_PORT (TLS 1.3, Bearer token required)"

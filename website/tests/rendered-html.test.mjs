@@ -67,6 +67,7 @@ test("every image reserves its dimensions", async () => {
   }
   assert.match(html, /src="\/screenshots\/mac-main\.png"/);
   assert.match(html, /src="\/screenshots\/ios-home\.png"/);
+  assert.match(html, /src="\/screenshots\/mac-remote-scribe\.png"/);
 });
 
 test("no invented price appears in the visible copy", async () => {

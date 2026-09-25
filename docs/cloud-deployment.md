@@ -21,6 +21,12 @@ viendront du premier déploiement sur un compte RunPod. Ce chemin n’est pas
 | `llama-server` (llama.cpp `a298422`, CUDA) | `127.0.0.1:8003` | `GET /v1/models`, `POST /v1/chat/completions` ; vérifie aussi le token |
 | `start-all.sh` | — | supervise les trois processus ; si l’un s’arrête, il arrête les autres et sort, ce qui arrête le conteneur (vérifier la politique de redémarrage du Pod) |
 
+Caddy ne démarre qu’après la réponse `200` de `/health` sur `whisper-server` et
+`llama-server` (`wait-ready.sh`, 60 s au plus, réglable par
+`VOXLOCAL_READY_TIMEOUT`) : la première requête après un démarrage atteint un
+modèle chargé plutôt qu’un `502`. Passé ce délai, la porte démarre quand même
+et `check-services.py` indique le service encore en chargement.
+
 Les deux moteurs sont construits aux **mêmes commits** que les sous-modules de
 l’app Mac (`mac/VoxLocal/Vendor/src`) ; un test (`tests/test_runpod_runtime.py`)
 échoue si le `Dockerfile` et les sous-modules divergent.
@@ -33,6 +39,7 @@ Routes publiées par la porte (toutes exigent le token) :
 | `POST /voice/v1/audio/transcriptions` | Whisper |
 | `GET /llm/v1/models`, `POST /llm/v1/chat/completions` | LLM |
 | `GET /v1/models`, `POST /v1/audio/transcriptions`, `POST /v1/chat/completions` | idem, sans préfixe, pour un poste configuré avec une seule URL (app Mac) |
+| `/llm/*` et `POST /v1/chat/completions` avec `VOXLOCAL_LLM=off` | `404` avec un corps JSON d’erreur (pas de `502`) |
 | toute autre route | `404` ; sans token valide : `401` |
 
 L’interface web de `llama-server` n’est pas construite et son endpoint `/slots`
@@ -165,6 +172,10 @@ VOXLOCAL_API_TOKEN=<token> python3 cloud/runpod/benchmark.py --iterations 5 --ti
   --voice-url https://<ip>:<port>/voice --llm-url https://<ip>:<port>/llm > bench.json
 python3 cloud/runpod/bench-report.py bench.json
 ```
+
+`--timeout` doit valoir au moins `30` (le maximum accepté) : la transcription de
+la tonalité de 10 s dépasse le défaut de 5 s sur un Pod froid ou un gros modèle
+Whisper, et l’échantillon serait compté en échec.
 
 ## Mesurer
 

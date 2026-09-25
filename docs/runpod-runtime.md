@@ -20,7 +20,11 @@ token, the certificate, the models and the Caddyfile at boot, then execs
 * `VOXLOCAL_LLM_CMD` (optional, `VOXLOCAL_LLM=off` disables it): `llama-server`
   on `127.0.0.1:8003`, `--api-key-file` on the same token
 * `VOXLOCAL_EDGE_CMD` (optional): Caddy on `:8443`, TLS 1.3, Bearer token
-  required, routes `/voice/*`, `/llm/*` and the unprefixed OpenAI routes
+  required, routes `/voice/*`, `/llm/*` and the unprefixed OpenAI routes. In
+  the image it first runs `wait-ready.sh`, which polls the `/health` of
+  `whisper-server` and `llama-server` for up to 60 s (`VOXLOCAL_READY_TIMEOUT`)
+  so the first request does not meet a 502. With `VOXLOCAL_LLM=off`, `/llm/*`
+  and `/v1/chat/completions` answer a JSON `404`
 
 If any child exits, the supervisor stops the others and exits with status 2, so
 the Pod stops rather than serving half a runtime. `VOXLOCAL_TLS_CERT` and

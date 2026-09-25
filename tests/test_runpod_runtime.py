@@ -216,6 +216,29 @@ class RunpodImageTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('"Bearer {env.VOXLOCAL_API_TOKEN}"', result.stdout)
 
+    def test_llm_routes_answer_json_404_when_llm_is_off(self):
+        caddyfile = _caddyfile_template()
+        off = caddyfile.index("@llm_off {")
+        # The LLM-off matcher must precede the proxying LLM handlers, or those
+        # would answer first with a 502 from an empty upstream.
+        self.assertLess(off, caddyfile.index("handle @llm {"))
+        self.assertLess(off, caddyfile.index("handle @root_chat {"))
+        block = caddyfile[off:caddyfile.index("\n\t\t}", caddyfile.index("handle @llm_off {"))]
+        self.assertIn("path /llm/* /v1/chat/completions", block)
+        self.assertIn('expression `{env.VOXLOCAL_LLM_ENABLED} == "off"`', block)
+        body = re.search(r"respond `(\{.*\})` 404", block)
+        self.assertIsNotNone(body, block)
+        self.assertEqual(json.loads(body.group(1))["error"]["code"], 404)
+        entrypoint = (RUNPOD / "entrypoint.sh").read_text(encoding="utf-8")
+        self.assertIn("export VOXLOCAL_LLM_ENABLED=off", entrypoint)
+
+    def test_edge_waits_for_model_health_before_caddy(self):
+        text = (RUNPOD / "entrypoint.sh").read_text(encoding="utf-8")
+        self.assertIn('READY_TIMEOUT="${VOXLOCAL_READY_TIMEOUT:-60}"', text)
+        self.assertIn("http://127.0.0.1:8001/v1/audio/transcriptions/health", text)
+        self.assertIn("http://127.0.0.1:8003/health", text)
+        self.assertRegex(text, r'VOXLOCAL_EDGE_CMD="bash \$wait_path \$READY_TIMEOUT \$health_urls && exec caddy run')
+
     def test_entrypoint_service_commands(self):
         text = (RUNPOD / "entrypoint.sh").read_text(encoding="utf-8")
         self.assertIn("openssl rand -hex 32", text)
@@ -265,6 +288,51 @@ class StartAllTlsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("must be set together", result.stderr)
             self.assertFalse(out.exists())
+
+
+class ReadyHandler(BaseHTTPRequestHandler):
+    ready_after = 0.0
+
+    def do_GET(self):
+        ok = self.path == "/health" and time.monotonic() >= type(self).ready_after
+        self.send_response(200 if ok else 503)
+        self.end_headers()
+
+    def log_message(self, *_args):
+        pass
+
+
+class WaitReadyTests(unittest.TestCase):
+    def _server(self, delay):
+        handler = type("Handler", (ReadyHandler,), {"ready_after": time.monotonic() + delay})
+        server = HTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_port}/health"
+
+    def _run(self, *args):
+        return subprocess.run(["bash", str(RUNPOD / "wait-ready.sh"), *args],
+                              capture_output=True, text=True, timeout=20)
+
+    def test_waits_until_every_service_is_ready(self):
+        fast, slow = self._server(0), self._server(1.5)
+        started = time.monotonic()
+        result = self._run("10", fast, slow)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreaterEqual(time.monotonic() - started, 1.0)
+        self.assertIn(f"ready {fast}", result.stdout)
+        self.assertIn(f"ready {slow}", result.stdout)
+
+    def test_timeout_warns_and_lets_the_edge_start(self):
+        never = self._server(3600)
+        result = self._run("1", never)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("not ready after 1s", result.stderr)
+
+    def test_rejects_non_loopback_urls_and_bad_timeout(self):
+        self.assertEqual(self._run("5", "http://10.0.0.1:8001/health").returncode, 2)
+        self.assertEqual(self._run("5s", "http://127.0.0.1:8001/health").returncode, 2)
 
 
 class DeployGuardTests(unittest.TestCase):

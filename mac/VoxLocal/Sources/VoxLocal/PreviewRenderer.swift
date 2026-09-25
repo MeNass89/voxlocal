@@ -12,6 +12,7 @@ enum PreviewRenderer {
     nonisolated private static let windowSize = NSSize(width: 1080, height: 700)
 
     static func render(to directory: URL) throws {
+        forceFrenchLocale()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         // Seeded data: 3 dictations, one model per category (header-only files).
@@ -59,6 +60,17 @@ enum PreviewRenderer {
         empty.shutdown()
         settle()
         print("Rendered VoxLocal previews to \(directory.path)")
+    }
+
+    /// Previews show the product as a French ward sees it, whatever the build
+    /// machine's language: dates read "25 sept. 2026 à 09:42". The argument
+    /// domain is volatile (same as launching with `-AppleLanguages (fr_FR)`), so
+    /// the real app's saved preferences are never touched.
+    private static func forceFrenchLocale() {
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments["AppleLanguages"] = ["fr_FR"]
+        arguments["AppleLocale"] = "fr_FR"
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
     }
 
     /// Lets async main-queue work (server status, TLS identity) land before a render.
