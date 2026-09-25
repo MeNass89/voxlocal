@@ -1,32 +1,42 @@
-# RunPod runtime bootstrap
+# RunPod runtime
 
-`start-all.sh` is a deliberately small supervisor for the existing Pod
-bootstrap (`bash /workspace/voxlocal/start-all.sh`). It does not call the
-RunPod control plane and it does not select a GPU or a model. The image owner
-provides `VOXLOCAL_VOICE_CMD` and, when approved, separate `VOXLOCAL_CLEAN_CMD`
-and `VOXLOCAL_LLM_CMD` commands. Each command must bind to loopback and expose
-an OpenAI-compatible `/v1/models` route. The Pod's reviewed HTTPS edge is the
-only externally reachable interface.
+One image, one command, one exposed port. Full guide (French):
+[`docs/cloud-deployment.md`](../../docs/cloud-deployment.md). Operator runbook:
+[`docs/runpod-runtime.md`](../../docs/runpod-runtime.md).
 
-The token is read from `/workspace/voxlocal/api-token` inside the Pod. The
-bootstrap rejects group/world-readable token files, never puts the token in a
-command line, and never prints it. Keep service logs under the private `logs`
-directory and configure model servers not to log request bodies. `check-services.py`
-performs a synthetic readiness check and redacts all response details.
-
-Example (inside the Pod, after the image owner has installed the model
-servers):
+| File | Role |
+| --- | --- |
+| `Dockerfile` | CUDA 12.4.1 / Ubuntu 22.04 image: `whisper-server` and `llama-server` built at the submodule commits, Caddy edge, Python 3.11 tools |
+| `entrypoint.sh` | image entrypoint: token, TLS certificate, model download (SHA-256 checked), Caddyfile, then `start-all.sh` |
+| `start-all.sh` | provider-neutral supervisor for the voice, clean, LLM and edge commands |
+| `deploy.sh` | `runpodctl` deployment: build and push, template, Pod, fingerprint check, host configuration |
+| `benchmark.py` | synthetic benchmark (`--iterations`, p50/p95, tokens/s); JSON schema in its docstring |
+| `bench-report.py` | renders the benchmark JSON as a Markdown table |
+| `check-services.py` | readiness probe of `/v1/models` |
+| `runtime.env.example` | placeholder commands for an image that is not this one |
 
 ```bash
-chmod 700 /workspace/voxlocal/start-all.sh
-chmod 600 /workspace/voxlocal/api-token
-export VOXLOCAL_VOICE_CMD='python -m voice_server --host 127.0.0.1 --port 8001 --model large-v3'
-export VOXLOCAL_CLEAN_CMD='python -m clean_server --host 127.0.0.1 --port 8002 --model <approved-small-model>'
-bash /workspace/voxlocal/start-all.sh
+export RUNPOD_API_KEY=<key>
+export VOXLOCAL_IMAGE=docker.io/<you>/voxlocal-runpod:<tag>
+bash cloud/runpod/deploy.sh
 ```
 
-Then, from a second Pod shell, run `python cloud/runpod/check-services.py
---service voice http://127.0.0.1:8001 --service clean
-http://127.0.0.1:8002`. Replace placeholders only after benchmarking and
-registering the real model, VRAM, region, certificate, retention and DPA
-controls. No RunPod endpoint or compliance claim is encoded here.
+Only Caddy listens outside loopback (`:8443`, TLS 1.3). Every request must carry
+`Authorization: Bearer <token>`; anything else gets `401`. The token lives in
+`/workspace/voxlocal/api-token` (mode `600`), generated at first boot or taken
+from a RunPod secret; no script prints it, puts it on a command line, or writes
+it into the Caddyfile. `whisper-server` and `llama-server` bind to
+`127.0.0.1:8001` and `127.0.0.1:8003`; `llama-server` checks the token too.
+
+`start-all.sh` still works on its own with operator-supplied commands
+(`VOXLOCAL_VOICE_CMD`, optional `VOXLOCAL_CLEAN_CMD`, `VOXLOCAL_LLM_CMD`,
+`VOXLOCAL_EDGE_CMD`). It rejects group/world-readable token files, and when
+`VOXLOCAL_TLS_CERT`/`VOXLOCAL_TLS_KEY` are set it checks that both exist and
+that the key is private before passing both paths to every child.
+
+Local proof without a GPU: build the two servers from the submodules (Metal),
+run `entrypoint.sh` with `VOXLOCAL_ROOT`, `VOXLOCAL_IMAGE_DIR`,
+`VOXLOCAL_MODELS_DIR` and `VOXLOCAL_EDGE_PORT` pointing at a scratch directory,
+then run `benchmark.py --iterations 3 --ca-file <scratch>/voxlocal/tls/cert.pem`
+against `https://127.0.0.1:<port>/voice` and `/llm`. Result of 2026-09-25:
+`docs/superpowers/evidence/2026-09-25-cloud-bench-local.json`.
