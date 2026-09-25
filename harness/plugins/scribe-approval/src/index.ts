@@ -155,6 +155,8 @@ export function lineDiff(before: string, after: string): string[] {
   return out
 }
 
+const DIFF_LABEL: Record<string, string> = { '+': 'AJOUT', '-': 'RETRAIT', ' ': 'inchangé' }
+
 /** The French approval prompt shown in the dsh chat. Pure: draft + patient label in, text out. */
 export function approvalPrompt(tool: GatedTool, draft: Draft, patientLabel: string | undefined): string {
   const section = `${draft.attribute} (${SECTION_LABELS[draft.attribute] ?? 'section narrative'})`
@@ -174,8 +176,10 @@ export function approvalPrompt(tool: GatedTool, draft: Draft, patientLabel: stri
     `Section : ${section}`,
     ...(dictations.length === 0 ? [] : [`Dictée : ${dictations.join(', ')} (patient de la dictée = patient du brouillon, vérifié par le pont)`]),
     `Brouillon : ${draft.draft_id}`,
+    // The dsh web panel renders this text as one paragraph (newlines collapse), so every diff
+    // line carries its own label and quotes instead of relying on layout.
     'Modification exacte :',
-    ...lineDiff(draft.base_text, draft.final_text).map(line => `  ${line}`),
+    ...lineDiff(draft.base_text, draft.final_text).map(line => `  ${DIFF_LABEL[line[0]!]} : « ${line.slice(2)} »`),
     'Citations de la dictée :',
     ...quotes,
     `Motif : ${draft.rationale}`,
