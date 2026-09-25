@@ -99,9 +99,11 @@ public final class RemoteScribeServer {
         listener.start(queue: queue)
     }
 
+    /// Strong capture on purpose: callers usually drop their reference right after
+    /// `stop()`, and a weak capture would then skip the cancel and leave the listener
+    /// (retained by its own callbacks) holding the port.
     public func stop() {
-        queue.async { [weak self] in
-            guard let self else { return }
+        queue.async { [self] in
             self.listener?.cancel()
             self.listener = nil
             self.peers.values.forEach { $0.cancel() }

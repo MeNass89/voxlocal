@@ -1,4 +1,5 @@
 import configparser
+import hashlib
 import importlib.util
 import io
 import json
@@ -385,6 +386,165 @@ class DeployGuardTests(unittest.TestCase):
             self.assertIn("VOXLOCAL_TOKEN_SECRET is not set", result.stderr)
             self.assertNotIn("synthetic-key", result.stdout + result.stderr)
             self.assertFalse(Path(str(fake) + ".log").exists())
+
+
+def _bash_functions(path, *names):
+    """Source of the named top-level bash functions of a script, in order."""
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    chunks = []
+    for name in names:
+        start = next(i for i, line in enumerate(lines) if line.startswith(f"{name}() {{"))
+        if lines[start].rstrip().endswith("}"):
+            chunks.append(lines[start])
+            continue
+        end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+        chunks.append("\n".join(lines[start:end + 1]))
+    return "\n".join(chunks) + "\n"
+
+
+# Records its argv, then serves the URL read from a curl config file.
+FAKE_CURL = """#!/usr/bin/env python3
+import json, os, re, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_CURL_LOG"], "a", encoding="utf-8") as log:
+    log.write(json.dumps(args) + "\\n")
+out = args[args.index("-o") + 1]
+config = open(args[args.index("--config") + 1], encoding="utf-8").read()
+url = re.fullmatch(r'url = "([^"]*)"\\n', config).group(1)
+open(out, "w", encoding="utf-8").write("model from " + url)
+"""
+
+
+@unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "bash required")
+class ModelFetchTests(unittest.TestCase):
+    URL = "https://example.invalid/models/m.bin?X-Amz-Signature=synthetic-signature"
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.models = self.dir / "models"
+        self.models.mkdir()
+        bin_dir = self.dir / "bin"
+        bin_dir.mkdir()
+        curl = bin_dir / "curl"
+        curl.write_text(FAKE_CURL, encoding="utf-8")
+        curl.chmod(0o755)
+        self.log = self.dir / "curl.log"
+        self.env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                    "FAKE_CURL_LOG": str(self.log), "MODELS_DIR": str(self.models)}
+        self.functions = _bash_functions(RUNPOD / "entrypoint.sh", "log", "die", "sha256_of", "fetch_model")
+
+    def _fetch(self, sha):
+        script = self.functions + 'fetch_model m.bin "$1" "$2"\n'
+        return subprocess.run(["bash", "-c", script, "fetch", self.URL, sha], env=self.env,
+                              capture_output=True, text=True, timeout=20)
+
+    def _calls(self):
+        if not self.log.exists():
+            return []
+        return [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
+
+    def test_url_never_reaches_curl_argv(self):
+        expected = hashlib.sha256(("model from " + self.URL).encode()).hexdigest()
+        result = self._fetch(expected)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.models / "m.bin").read_text(encoding="utf-8"), "model from " + self.URL)
+        calls = self._calls()
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(any("synthetic-signature" in arg for arg in calls[0]), calls[0])
+        self.assertNotIn("synthetic-signature", result.stdout + result.stderr)
+
+    def test_present_model_with_wrong_hash_is_set_aside_and_downloaded_again(self):
+        (self.models / "m.bin").write_text("tampered", encoding="utf-8")
+        expected = hashlib.sha256(("model from " + self.URL).encode()).hexdigest()
+        result = self._fetch(expected)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.models / "m.bin").read_text(encoding="utf-8"), "model from " + self.URL)
+        corrupt = list(self.models.glob("m.bin.corrupt-*"))
+        self.assertEqual(len(corrupt), 1)
+        self.assertEqual(corrupt[0].read_text(encoding="utf-8"), "tampered")
+        self.assertEqual(len(self._calls()), 1)
+
+    def test_present_model_with_matching_hash_is_not_downloaded(self):
+        (self.models / "m.bin").write_text("good", encoding="utf-8")
+        result = self._fetch(hashlib.sha256(b"good").hexdigest())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self._calls(), [])
+        self.assertIn("model verified: m.bin", result.stdout)
+
+    def test_url_that_breaks_the_curl_config_is_refused(self):
+        script = self.functions + 'fetch_model m.bin "$1" ""\n'
+        result = subprocess.run(["bash", "-c", script, "fetch", 'https://example.invalid/a"b'], env=self.env,
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self._calls(), [])
+
+
+@unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "bash required")
+class SanMatchTests(unittest.TestCase):
+    SAN = "X509v3 Subject Alternative Name: \n    DNS:localhost, IP Address:127.0.0.1, IP Address:203.0.113.45\n"
+
+    def _matches(self, script, text, ip):
+        source = _bash_functions(RUNPOD / script, "san_names_ip") + 'san_names_ip "$1" "$2"\n'
+        return subprocess.run(["bash", "-c", source, "san", text, ip], capture_output=True, timeout=10).returncode == 0
+
+    def test_exact_ip_only(self):
+        for script in ("entrypoint.sh", "deploy.sh"):
+            with self.subTest(script=script):
+                self.assertTrue(self._matches(script, self.SAN, "203.0.113.45"))
+                self.assertTrue(self._matches(script, self.SAN, "127.0.0.1"))
+                self.assertTrue(self._matches(script, self.SAN.rstrip("\n"), "203.0.113.45"))
+                # A prefix of the certified address is a different address.
+                self.assertFalse(self._matches(script, self.SAN, "203.0.113.4"))
+                self.assertFalse(self._matches(script, self.SAN, "27.0.0.1"))
+                # Dots are literal.
+                self.assertFalse(self._matches(script, "IP Address:203a0b113c45", "203.0.113.45"))
+
+    @unittest.skipUnless(shutil.which("openssl"), "openssl required")
+    def test_entrypoint_reissues_a_certificate_for_a_prefix_ip(self):
+        probe = subprocess.run(["openssl", "x509", "-help"], capture_output=True, text=True)
+        if "-ext " not in probe.stdout + probe.stderr:
+            self.skipTest("openssl without x509 -ext (LibreSSL)")
+        with tempfile.TemporaryDirectory() as directory:
+            cert, key = Path(directory) / "cert.pem", Path(directory) / "key.pem"
+            source = _bash_functions(RUNPOD / "entrypoint.sh", "log", "san_names_ip", "ensure_self_signed")
+            script = source + 'ensure_self_signed "$1" "$2"\n'
+
+            def run(ip):
+                result = subprocess.run(["bash", "-c", script, "tls", str(cert), str(key)],
+                                        env={**os.environ, "RUNPOD_PUBLIC_IP": ip},
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return cert.read_bytes()
+
+            first = run("203.0.113.45")
+            self.assertEqual(run("203.0.113.45"), first)
+            second = run("203.0.113.4")
+            self.assertNotEqual(second, first)
+            san = subprocess.run(["openssl", "x509", "-in", str(cert), "-noout", "-ext", "subjectAltName"],
+                                 capture_output=True, text=True).stdout
+            self.assertIn("IP Address:203.0.113.4\n", san + "\n")
+
+
+@unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "bash required")
+class DeploySignedUrlTests(unittest.TestCase):
+    def test_signed_model_url_is_refused_before_runpodctl(self):
+        for name, url in (("WHISPER_MODEL_URL", "https://bucket.example/m.bin?X-Amz-Signature=synthetic-signature"),
+                          ("LLM_MODEL_URL", "https://example.invalid/m.gguf/token=synthetic-signature"),
+                          ("WHISPER_MODEL_URL", "https://user:synthetic-signature@example.invalid/m.bin")):
+            with self.subTest(url=url), tempfile.TemporaryDirectory() as directory:
+                fake = Path(directory) / "runpodctl"
+                fake.write_text("#!/bin/sh\necho called >> \"$0.log\"\n", encoding="utf-8")
+                fake.chmod(0o755)
+                env = {**os.environ, "PATH": os.pathsep.join([directory, "/usr/bin", "/bin"]),
+                       "RUNPOD_API_KEY": "synthetic-key", "VOXLOCAL_IMAGE": "docker.io/example/voxlocal:test",
+                       "VOXLOCAL_SKIP_BUILD": "1", "VOXLOCAL_TOKEN_SECRET": "voxlocal_token", name: url}
+                result = subprocess.run(["/bin/bash", str(RUNPOD / "deploy.sh")], env=env,
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(f"{name} must be a public URL", result.stderr)
+                self.assertNotIn("synthetic-signature", result.stdout + result.stderr)
+                self.assertFalse(Path(str(fake) + ".log").exists(), "runpodctl must not run with a signed URL")
 
 
 class StubOpenAIHandler(BaseHTTPRequestHandler):

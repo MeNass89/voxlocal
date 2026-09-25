@@ -20,6 +20,7 @@ let package = Package(
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("Carbon")
             ]
-        )
+        ),
+        .testTarget(name: "VoxLocalTests", dependencies: ["VoxLocal"], path: "Tests/VoxLocalTests")
     ]
 )

@@ -60,4 +60,25 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertFalse(PortableClientModel.pinConflict(previous: fingerprint, incoming: fingerprint))
         XCTAssertTrue(PortableClientModel.pinConflict(previous: other, incoming: fingerprint))
     }
+
+    /// The case-insensitive Bonjour fallback copies the link's pin under the
+    /// discovered name only when that name has no pin or the same one.
+    func testDiscoveredNamePinIsNeverOverwritten() {
+        let other = Data(repeating: 0x11, count: 32)
+        XCTAssertEqual(PortableClientModel.resolvePinForDiscoveredName(existing: nil, linked: fingerprint), fingerprint)
+        XCTAssertEqual(PortableClientModel.resolvePinForDiscoveredName(existing: fingerprint, linked: fingerprint), fingerprint)
+        XCTAssertNil(PortableClientModel.resolvePinForDiscoveredName(existing: other, linked: fingerprint))
+    }
+
+    /// The Mac shows "ABCD-2345"; the wire value is "ABCD2345". Codes chosen by an
+    /// operator for the Python host are sent as typed.
+    func testPairingCodeTypedAsDisplayedIsNormalized() {
+        XCTAssertEqual(PortableClientModel.normalizePairingCode("ABCD-2345"), "ABCD2345")
+        XCTAssertEqual(PortableClientModel.normalizePairingCode(" abcd 2345\n"), "ABCD2345")
+        XCTAssertEqual(PortableClientModel.normalizePairingCode("abcd-2345"), "ABCD2345")
+        XCTAssertEqual(PortableClientModel.normalizePairingCode("ABCD2345"), "ABCD2345")
+        XCTAssertEqual(PortableClientModel.normalizePairingCode("change-this"), "change-this")
+        XCTAssertEqual(PortableClientModel.normalizePairingCode("test-only-123456"), "test-only-123456")
+        XCTAssertNil(PortableClientModel.normalizePairingCode("  \n"))
+    }
 }

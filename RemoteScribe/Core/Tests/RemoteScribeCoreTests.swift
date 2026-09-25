@@ -179,6 +179,86 @@ import Testing
     #expect(later.contains { $0.kind == .pair })
 }
 
+@Test func frameBeforePairIsRefused() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var replies: [RemoteFrame] = []
+    let handler = RemoteSessionHandler(backend: VoxLocalBackend(), serverName: "test", sessionsDirectory: root) { replies.append($0) }
+    handler.handle(try .json(kind: .ping, value: PingPayload(timestamp: 1)))
+    #expect(!replies.contains { $0.kind == .ping })
+    let error = try #require(replies.first { $0.kind == .error }).decode(RemoteErrorPayload.self)
+    #expect(error.message == RemoteScribeError.notPaired.localizedDescription)
+}
+
+@Test func secondPairIsRefused() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var replies: [RemoteFrame] = []
+    let handler = RemoteSessionHandler(backend: VoxLocalBackend(), serverName: "test", sessionsDirectory: root) { replies.append($0) }
+    handler.handle(try .json(kind: .pair, value: PairRequest(deviceID: "id", deviceName: "phone")))
+    #expect(replies.filter { $0.kind == .pair }.count == 1)
+    replies.removeAll()
+    handler.handle(try .json(kind: .pair, value: PairRequest(deviceID: "id", deviceName: "other")))
+    #expect(!replies.contains { $0.kind == .pair })
+    let error = try #require(replies.first { $0.kind == .error }).decode(RemoteErrorPayload.self)
+    #expect(error.message.contains("PAIR déjà reçu"))
+}
+
+@Test func pairWithASessionIDIsRefused() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var replies: [RemoteFrame] = []
+    let handler = RemoteSessionHandler(backend: VoxLocalBackend(), serverName: "test", sessionsDirectory: root) { replies.append($0) }
+    handler.handle(try .json(kind: .pair, sessionID: UUID(), value: PairRequest(deviceID: "id", deviceName: "phone")))
+    #expect(!replies.contains { $0.kind == .pair })
+    let error = try #require(replies.first { $0.kind == .error }).decode(RemoteErrorPayload.self)
+    #expect(error.message.contains("PAIR sans session"))
+    // Nothing else is accepted on this connection afterwards.
+    replies.removeAll()
+    handler.handle(try .json(kind: .startSession, sessionID: UUID(), value: StartSessionRequest()))
+    #expect(replies.allSatisfy { $0.kind == .error })
+}
+
+/// The controller drops its reference right after `stop()`; the listener must
+/// still be torn down so the port can be bound again.
+@Test func stoppedServerReleasesItsPort() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var server: RemoteScribeServer? = RemoteScribeServer(backend: VoxLocalBackend(), serviceName: "stop-test-\(UUID().uuidString.prefix(8))", sessionsDirectory: root)
+    let ready = DispatchSemaphore(value: 0)
+    var port: UInt16 = 0
+    server?.onReady = { actual in port = actual; ready.signal() }
+    try server?.start(port: 0)
+    #expect(ready.wait(timeout: .now() + 5) == .success)
+    #expect(port != 0)
+    server?.stop()
+    server = nil
+    var bound = false
+    let deadline = Date().addingTimeInterval(3)
+    while !bound && Date() < deadline {
+        bound = canBind(port: port)
+        if !bound { usleep(50_000) }
+    }
+    #expect(bound)
+}
+
+/// Dual-stack wildcard bind without SO_REUSEADDR: fails while any listener holds the port.
+private func canBind(port: UInt16) -> Bool {
+    let fd = socket(AF_INET6, SOCK_STREAM, 0)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    var off: Int32 = 0
+    setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, socklen_t(MemoryLayout<Int32>.size))
+    var address = sockaddr_in6()
+    address.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+    address.sin6_family = sa_family_t(AF_INET6)
+    address.sin6_port = port.bigEndian
+    address.sin6_addr = in6addr_any
+    return withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) == 0 }
+    }
+}
+
 private final class ImmediateBackend: RemoteScribeBackend {
     let kind: RemoteBackendKind
     init(kind: RemoteBackendKind) { self.kind = kind }

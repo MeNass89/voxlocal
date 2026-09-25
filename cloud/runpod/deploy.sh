@@ -33,7 +33,10 @@ set -Eeuo pipefail
 #                              (default ~/.voxlocal/runpod)
 #   WHISPER_MODEL, WHISPER_MODEL_URL, WHISPER_MODEL_SHA256, WHISPER_LANGUAGE,
 #   LLM_MODEL, LLM_MODEL_URL, LLM_MODEL_SHA256, VOXLOCAL_LLM (on|off)
-#                              forwarded to the Pod (see entrypoint.sh)
+#                              forwarded to the Pod (see entrypoint.sh). A model
+#                              URL with a query string, token= or credentials is
+#                              refused (it would sit in runpodctl's argv); use a
+#                              RunPod secret reference for a signed URL.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GPU="${VOXLOCAL_GPU:-NVIDIA GeForce RTX 4090}"
@@ -83,9 +86,27 @@ MSG
   exit 2
 fi
 [[ "$VOXLOCAL_TOKEN_SECRET" =~ ^[A-Za-z0-9_-]+$ ]] || die "VOXLOCAL_TOKEN_SECRET must be a RunPod secret name" 2
+# runpodctl takes the Pod environment inline (--env JSON), so every value below
+# appears in its argv. A signed or tokenised model URL would leak there: refuse
+# it before anything runs. Put such a URL in a RunPod secret and pass the
+# reference instead, e.g. WHISPER_MODEL_URL='{{ RUNPOD_SECRET_whisper_url }}'.
+for name in WHISPER_MODEL_URL LLM_MODEL_URL; do
+  value="${!name:-}"
+  if [[ "$value" == *\?* || "$value" == *token=* || "$value" =~ ^[A-Za-z]+://[^/]*@ ]]; then
+    die "$name must be a public URL: a query string, token= or user:password@ would appear in runpodctl's arguments; store the URL in a RunPod secret and set $name='{{ RUNPOD_SECRET_<name> }}'" 2
+  fi
+done
+unset value
 if [[ "${VOXLOCAL_SKIP_BUILD:-0}" != 1 ]] && ! command -v docker >/dev/null 2>&1; then
   die "docker is required to build the image (or set VOXLOCAL_SKIP_BUILD=1 for an image already pushed)" 2
 fi
+
+# san_names_ip <openssl certificate text> <ip>: the SAN lists exactly this
+# address. A plain substring test would accept 203.0.113.45 for 203.0.113.4.
+san_names_ip() {
+  local text="$1" needle="IP Address:$2"
+  [[ "$text" == *"$needle" || "$text" == *"$needle,"* || "$text" == *"$needle"[[:space:]]* ]]
+}
 
 json_field() {
   # json_field <top-level key>: reads a JSON object on stdin, prints the value or nothing.
@@ -239,7 +260,7 @@ fi
 mv -f "$CERT_FILE.tmp" "$CERT_FILE"
 log "certificate matches the Pod log; saved to $CERT_FILE"
 cert_text="$(openssl x509 -in "$CERT_FILE" -noout -text 2>/dev/null || true)"
-if [[ "$cert_text" != *"IP Address:$PUBLIC_IP"* ]]; then
+if ! san_names_ip "$cert_text" "$PUBLIC_IP"; then
   log "WARNING: the certificate does not name $PUBLIC_IP (RUNPOD_PUBLIC_IP was unset at boot); restart the Pod once, or provide VOXLOCAL_TLS_CERT/KEY for a DNS name"
 fi
 

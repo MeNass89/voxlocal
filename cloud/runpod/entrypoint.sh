@@ -89,6 +89,13 @@ print_fingerprint() {
   log "TLS certificate SHA-256 fingerprint: $(openssl x509 -in "$1" -noout -fingerprint -sha256 | cut -d= -f2)"
 }
 
+# san_names_ip <openssl SAN text> <ip>: the SAN lists exactly this address. A
+# plain substring test would accept 203.0.113.45 for 203.0.113.4.
+san_names_ip() {
+  local text="$1" needle="IP Address:$2"
+  [[ "$text" == *"$needle" || "$text" == *"$needle,"* || "$text" == *"$needle"[[:space:]]* ]]
+}
+
 ensure_self_signed() {
   local cert="$1" key="$2" ip="${RUNPOD_PUBLIC_IP:-}" san="DNS:localhost,IP:127.0.0.1"
   [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || ip=""
@@ -101,7 +108,7 @@ ensure_self_signed() {
   if [[ -s "$cert" ]] \
      && openssl x509 -in "$cert" -noout -checkend 2592000 >/dev/null 2>&1 \
      && [[ "$(openssl x509 -in "$cert" -noout -pubkey)" == "$(openssl pkey -in "$key" -pubout)" ]] \
-     && { [[ -z "$ip" ]] || [[ "$(openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null)" == *"IP Address:$ip"* ]]; }; then
+     && { [[ -z "$ip" ]] || san_names_ip "$(openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null)" "$ip"; }; then
     return 0
   fi
   # A new certificate keeps the same key; the fingerprint changes and is
@@ -140,13 +147,30 @@ sha256_of() {
 fetch_model() {
   local name="$1" url="$2" sha="$3" target="$MODELS_DIR/$1"
   if [[ -s "$target" ]]; then
-    log "model present: $name"
-    return 0
+    if [[ -z "$sha" ]]; then
+      log "model present: $name (not verified: empty *_MODEL_SHA256)"
+      return 0
+    fi
+    # A file on the persistent volume is checked at every boot: it may have been
+    # altered, or the operator may have set a new model under the same name.
+    local present
+    present="$(sha256_of "$target")"
+    if [[ "$present" == "$sha" ]]; then
+      log "model verified: $name sha256=$present"
+      return 0
+    fi
+    local aside
+    aside="$target.corrupt-$(date -u +%Y%m%dT%H%M%SZ)"
+    mv -f "$target" "$aside"
+    log "WARNING: model $name has sha256=$present, expected $sha; moved to $aside (delete it once reviewed), downloading again"
   fi
   [[ "$url" == https://* ]] || die "model URL for $name must use https"
-  # The URL is not logged: a signed or tokenised URL must not reach the log.
+  # The URL goes to curl through a config file on a pipe, never through argv,
+  # so a signed URL is not visible in the process list; it is not logged either.
+  # The curl config syntax gives meaning to quotes, backslashes and whitespace.
+  [[ "$url" =~ ^https://[^[:space:]\"\\]+$ ]] || die "model URL for $name contains a quote, backslash or whitespace"
   log "downloading model $name"
-  curl -fsSL --proto '=https' --retry 3 --retry-delay 5 -o "$target.partial" "$url" \
+  curl -fsSL --proto '=https' --retry 3 --retry-delay 5 -o "$target.partial" --config <(printf 'url = "%s"\n' "$url") \
     || { rm -f "$target.partial"; die "download failed for $name"; }
   if [[ -n "$sha" ]]; then
     local got
