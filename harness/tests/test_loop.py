@@ -37,6 +37,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -222,6 +223,18 @@ class BridgeProcess:
         self.url = f"http://127.0.0.1:{m.group(1)}/"
         return self
 
+    def restart(self) -> "BridgeProcess":
+        """Kill the process and start a new one on the same drafts, audit and portal state."""
+        self.stop()
+        return self.start()
+
+    def rpc(self, method: str, params: dict, token: str = TOOL_TOKEN) -> dict:
+        req = urllib.request.Request(self.url, method="POST", data=json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read())
+
     def stop(self):
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
@@ -247,7 +260,7 @@ class BridgeProcess:
 
 
 # ============================================================================ dsh
-def _overlay(provider_url: str, answerer: bool) -> str:
+def _overlay(provider_url: str, answerer: bool, extra: tuple[str, ...] = ()) -> str:
     """Test layer applied after the tracked scribe patch: scripted model, no shell/file/web
     tools (the headless bundle mounts the coding tool rows globally), no LLM side calls."""
     rows = [
@@ -266,6 +279,7 @@ def _overlay(provider_url: str, answerer: bool) -> str:
                 "tool-subagent-list-agents", "tool-workflow", "workflow-ptc", "tool-todo",
                 "tool-goal", "tool-web", "agent-instructions", "skill-filesystem"):
         rows.append(f"- id: {row}\n  disabled: true")
+    rows.extend(extra)
     if answerer:
         rows.append(f"- insert:\n    - id: test-answerer\n      name: '{ANSWERER.as_posix()}'\n"
                     f"      config:\n        outcome: allowed-once")
@@ -293,9 +307,9 @@ class Harness:
                             ("scribe-approval", "scribe-approval"), ("scribe-persona", "scribe-persona")):
             (profile / "node_modules" / "@voxlocal" / pkg).symlink_to(HARNESS / "plugins" / target)
 
-    def run(self, policy: str, answerer: bool) -> tuple[subprocess.CompletedProcess, list[dict]]:
-        overlay = self.root / f"overlay-{policy}-{int(answerer)}.yml"
-        overlay.write_text(_overlay(self.provider.url, answerer))
+    def run(self, policy: str, answerer: bool, extra: tuple[str, ...] = ()) -> tuple[subprocess.CompletedProcess, list[dict]]:
+        overlay = self.root / f"overlay-{policy}-{int(answerer)}-{len(extra)}.yml"
+        overlay.write_text(_overlay(self.provider.url, answerer, extra))
         env = {**os.environ,
                "DSH_HOME": str(self.home), "DSH_AGENTS_HOME": str(self.home / "agents"),
                "DSH_PERMISSION_MODE": "workspace-write", "DSH_TELEMETRY_MODE": "DISABLED",
@@ -422,6 +436,44 @@ class LoopTest(unittest.TestCase):
         self.assertEqual([self.bridge.drafts()[d]["status"] for d in draft_ids], ["applied", "applied"])
         final = [e for e in events if e.get("type") == "final"][-1]
         self.assertIn("Appliqué", final["text"])
+
+    # ------------------------------------------------------------------ Amendment 1, end to end
+    # test_bridge.py already proves, bridge-side: apply without approval -> 403, draft changed
+    # after approval -> 409, live section changed -> 409, approval bound to another patient ->
+    # 403, replay after an in-process reopen, restore gated. The two below are the harness-level
+    # halves that only a full loop can show.
+
+    def test_without_the_harness_gate_the_bridge_still_refuses(self):
+        """The dsh gate is UX, not the boundary: unmount it and the model's record_apply reaches
+        the bridge, which refuses with 403 because no human approval reached it."""
+        proc, events = self.h.run("ask", answerer=True, extra=("- id: scribe-approval\n  disabled: true",))
+        self.assertCleanBoot(proc)
+        draft_ids = self.assertDrafted(events)
+        applies = results_of(events, "record_apply")
+        self.assertEqual([r["status"] for r in applies], ["error", "error"])
+        for r in applies:
+            self.assertIn("Pont portail (403)", r["result"])
+        self.assertEqual(self.h.answered(), [])  # nobody asked: no gate, no question
+        self.assertEqual(self.bridge.writes(), [])
+        refused = [l for l in self.bridge.jsonl("portal-writes.jsonl") if l["result"] == "refused"]
+        self.assertEqual([(l["draft_id"], l["status"], l["reason"]) for l in refused],
+                         [(d, 403, "not-approved") for d in draft_ids])
+        self.assertEqual(self.h.approval_lines(), [])
+
+    def test_replay_after_a_bridge_process_restart_writes_nothing(self):
+        proc, _ = self.h.run("ask", answerer=True)
+        self.assertCleanBoot(proc)
+        writes = self.bridge.writes()
+        self.assertEqual(len(writes), 2)
+        audit_before = self.bridge.jsonl("portal-writes.jsonl")
+        self.bridge.restart()
+        for w in writes:
+            res = self.bridge.rpc("apply", {"draft_id": w["draft_id"]})["result"]
+            self.assertTrue(res["replayed"])
+            self.assertEqual((res["version_after"], res["backup_id"]), (w["version_after"], w["backup_id"]))
+        self.assertEqual(self.bridge.jsonl("portal-writes.jsonl"), audit_before)  # no new line, no write
+        # A replayed record_apply through dsh is refused before asking ("déjà appliqué"):
+        # harness/tests/test_scribe_approval.spec.ts covers it against the same bridge.
 
     def test_the_model_sees_the_scribe_persona_and_only_scribe_tools(self):
         proc, _ = self.h.run("never", answerer=False)
