@@ -1,0 +1,9 @@
+Copyright (c) 2026 VoxLocal contributors. All rights reserved.
+
+This source code is published for review, security audit and evaluation.
+No licence is granted to use, copy, modify, distribute or deploy it, in
+whole or in part, for any purpose other than reading and reviewing it,
+without prior written permission from the copyright holder.
+
+Third-party components under mac/VoxLocal/Vendor/src keep their own
+licences (whisper.cpp and llama.cpp: MIT, The ggml authors).

@@ -5,7 +5,7 @@ Page privée pour utiliser le microphone d’un iPhone sans installer d’applic
 ## Premier lancement
 
 ```bash
-cd /Users/nawfel/Projects/RemoteScribe/WebClient
+cd RemoteScribe/WebClient
 ./run-webclient.sh --backend superwhisper
 ```
 

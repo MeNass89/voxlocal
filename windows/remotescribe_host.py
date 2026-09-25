@@ -1,4 +1,4 @@
-"""Small Windows-friendly Remote Scribe v1 host.
+r"""Small Windows-friendly Remote Scribe v1 host.
 
 The host is intentionally a reference service for the pilot: it keeps audio in
 memory, enforces session limits, and delegates transcription to an injected

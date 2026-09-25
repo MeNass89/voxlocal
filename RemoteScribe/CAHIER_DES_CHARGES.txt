@@ -105,19 +105,19 @@ Application native iPhone et iPad
 4. STOCKAGE ACTUEL
 
 Code du projet :
-/Users/nawfel/Projects/RemoteScribe
+RemoteScribe/ (dans ce dépôt)
 
 Audios WAV RemoteScribe :
-/Users/nawfel/Library/Application Support/RemoteScribe/sessions/<UUID>/remote.wav
+~/Library/Application Support/RemoteScribe/sessions/<UUID>/remote.wav
 
 Base de l’historique :
-/Users/nawfel/Library/Application Support/RemoteScribe/history/history.sqlite3
+~/Library/Application Support/RemoteScribe/history/history.sqlite3
 
 Certificat et accès Web :
-/Users/nawfel/Library/Application Support/RemoteScribe/web
+~/Library/Application Support/RemoteScribe/web
 
 Copies créées par Superwhisper :
-/Users/nawfel/Documents/superwhisper/recordings/<identifiant>/output.wav
+~/Documents/superwhisper/recordings/<identifiant>/output.wav
 
 L’historique ne crée pas une troisième copie de l’audio. Il référence le WAV
 déjà présent dans le dossier sessions.

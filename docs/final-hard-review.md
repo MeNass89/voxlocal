@@ -1,7 +1,7 @@
 # Revue adversariale finale — Remote Scribe / VoxLocal
 
 Date de revue : 2026-09-24  
-Périmètre : `source/Core/Sources`, `source/PortableClient`, `windows/`, `server/`, documentation sécurité et protocole.
+Périmètre : `ios/Core/Sources`, `ios/RemoteScribePortable`, `windows/`, `server/`, documentation sécurité et protocole.
 
 Cette revue vérifie la compatibilité wire reconstruite, les invariants de session, les propriétés ZDR, le transport Windows/iOS et la cohérence entre les affirmations de la documentation et le code. Elle ne constitue pas une homologation RGPD ou une validation DPO.
 
@@ -21,11 +21,11 @@ Le projet reste un prototype. Les points P0 ci-dessous doivent être fermés ava
   - `PAIR.protocolVersion == 1` et `PAIR.sequence == 0` imposés.
 - `windows/test_remotescribe_host.py`
   - scénario de non-concordance du nombre de chunks ajouté ; le serveur renvoie `protocolViolation`.
-- `source/Core/Sources/RemoteClient.swift` et `FrameCodec.swift`
+- `ios/Core/Sources/RemoteClient.swift` et `FrameCodec.swift`
   - état réseau et compteurs sérialisés sur la queue de transport ; file d'envoi bornée ; STOP est ordonné après les chunks ; sessions terminales et décodeur réinitialisés ; EOF explicite ; callbacks d'une génération précédente ignorés.
 - `tests/test_swift_core.py` et `tests/swift_core_regression.swift`
   - peer socket indépendant qui vérifie deux sessions, 20 producteurs audio concurrents, les séquences et le rejeu après STOP, puis une reconnexion après trame tronquée.
-- `source/PortableClient/RemoteScribePortable/AudioStreamer.swift` et `PortableClientModel.swift`
+- `ios/RemoteScribePortable/AudioStreamer.swift` et `PortableClientModel.swift`
   - drain audio avant STOP, timeouts de transition, reconnexion protégée contre les callbacks obsolètes, historique Keychain opt-in et connexion Bonjour non automatique.
 
 Vérification : 5 tests Windows, 6 tests serveur et 2 tests Core Swift passent ; compilation Python par `py_compile` et `swiftc -typecheck` passées.
@@ -38,7 +38,7 @@ Vérification : 5 tests Windows, 6 tests serveur et 2 tests Core Swift passent ;
 
 Preuves :
 
-- `source/Core/Sources/RemoteClient.swift` accepte encore `tls: false` et, en TLS, s'en remet au trust store système ; aucun certificat épinglé ni certificat client mTLS n'est configuré. Le trust store géré reste une protection valable contre l'écoute lorsqu'il est correctement provisionné.
+- `ios/Core/Sources/RemoteClient.swift` accepte encore `tls: false` et, en TLS, s'en remet au trust store système ; aucun certificat épinglé ni certificat client mTLS n'est configuré. Le trust store géré reste une protection valable contre l'écoute lorsqu'il est correctement provisionné.
 - `server/voxlocal_server.py` exige désormais TLS pour un backend GPU et peut demander une CA client avec `--tls-client-ca`; le pinning/mTLS géré reste un durcissement de pilote à provisionner.
 - `windows/remotescribe_host.py:416-418` est explicitement plaintext.
 
@@ -138,7 +138,7 @@ Action : afficher le serveur réellement appairé et ajouter le pin de certifica
 python3 -m unittest discover -s windows -p 'test_*.py' -v   # 5 OK
 python3 -m unittest discover -s tests -p 'test_*.py' -v     # 8 OK (dont 2 Core Swift)
 python3 -m py_compile server/voxlocal_server.py windows/*.py # OK
-swiftc -typecheck source/Core/Sources/*.swift                 # OK
+swiftc -typecheck ios/Core/Sources/*.swift                 # OK
 ```
 
 La compilation Xcode/iOS et le test réel TLS n'ont pas été exécutés dans cet environnement (SDK, certificats et réseau hospitalier absents).

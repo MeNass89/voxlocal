@@ -31,7 +31,7 @@ iOS 27 SDK:
 
 ```bash
 xcodebuild -quiet \
-  -project source/PortableClient/RemoteScribePortable.xcodeproj \
+  -project ios/RemoteScribePortable.xcodeproj \
   -scheme RemoteScribePortable -configuration Debug \
   -destination 'generic/platform=iOS' \
   -derivedDataPath /tmp/voxlocal-ios-derived \

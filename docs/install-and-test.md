@@ -27,8 +27,8 @@ l’agent est dans le nouveau DMG ; le serveur de compatibilité reste sous
 ## iPhone / iPad
 
 Aucun `.ipa` signé n’est livré. La source Xcode canonique est
-`source/PortableClient/RemoteScribePortable.xcodeproj`. Pour produire une app
-testable :
+`ios/RemoteScribePortable.xcodeproj` ; le client Core durci qu’elle compile est
+dans `ios/Core/Sources`. Pour produire une app testable :
 
 1. Installer la version complète de Xcode, puis ouvrir le projet.
 2. Dans **Signing & Capabilities**, sélectionner la Team Apple et remplacer le
@@ -41,8 +41,6 @@ testable :
 
 Le projet a été compilé ici avec Xcode 27.0 sans signature. Aucun `.ipa` signé
 n’est livré : la signature appareil se fait dans Xcode avec la Personal Team.
-Le miroir historique `RemoteScribePortable/PortableClient/` contient les mêmes
-sources et le Core reconstruit.
 
 Le build reproductible est préparé par
 [`scripts/build-ios.sh`](../scripts/build-ios.sh) :

@@ -1,20 +1,20 @@
 # VoxLocal — code source complet
 
-Cette archive contient le code source, et pas seulement l'application macOS
-compilée.
+Ce dossier contient le code source de l'application macOS, et pas seulement
+l'application compilée.
 
 ## Structure à conserver
 
-Les deux dossiers doivent rester côte à côte :
+Dans ce dépôt, les deux dossiers doivent rester à ces emplacements :
 
 ```text
-VoxLocal-Source-Complet/
-├── VoxLocal/
+<racine du dépôt>/
+├── mac/VoxLocal/
 └── RemoteScribe/
 ```
 
-`VoxLocal/Package.swift` référence `../RemoteScribe`. Déplacer uniquement le
-dossier `VoxLocal` casserait donc la dépendance.
+`mac/VoxLocal/Package.swift` référence `../../RemoteScribe`. Déplacer
+uniquement le dossier `mac/VoxLocal` casserait donc la dépendance.
 
 ## Ouvrir dans Xcode
 
@@ -22,51 +22,45 @@ VoxLocal est un Swift Package et non un projet `.xcodeproj` classique.
 
 1. Ouvrir Xcode.
 2. Choisir **File > Open**.
-3. Sélectionner le dossier `VoxLocal` ou le fichier
-   `VoxLocal/Package.swift`.
+3. Sélectionner le dossier `mac/VoxLocal` ou le fichier
+   `mac/VoxLocal/Package.swift`.
 4. Sélectionner le schéma **VoxLocal**.
 
-En ligne de commande :
+En ligne de commande, depuis la racine du dépôt :
 
 ```bash
-open -a Xcode VoxLocal/Package.swift
+open -a Xcode mac/VoxLocal/Package.swift
 ```
 
 ## Construire l'application macOS complète
 
-Depuis la racine de cette archive :
+Depuis la racine du dépôt, récupérer d'abord les sources de whisper.cpp et
+llama.cpp (sous-modules git). `Vendor/bin` (les exécutables `whisper-cli` et
+`llama-cli`) n'est pas versionné : le construire nativement demande CMake, et
+`./setup.sh` refuse de continuer tant qu'il manque.
 
 ```bash
-cd VoxLocal
+git submodule update --init
+cd mac/VoxLocal
+./build-runtimes.sh
 ./setup.sh
 ./build.sh
 open dist/VoxLocal.app
 ```
 
-Les exécutables `whisper-cli` et `llama-cli` déjà fournis dans `Vendor/bin`
-sont compilés pour Mac Intel (`x86_64`). Sur un Mac Apple Silicon, ils peuvent
-fonctionner via Rosetta ; pour les reconstruire nativement, installer CMake
-puis lancer :
-
-```bash
-cd VoxLocal
-./build-runtimes.sh
-./build.sh
-```
-
 ## Contenu
 
-- `VoxLocal/Sources/VoxLocal/` : code Swift/SwiftUI principal ;
+- `mac/VoxLocal/Sources/VoxLocal/` : code Swift/SwiftUI principal ;
 - `RemoteScribe/Core/Sources/` : bibliothèque Swift requise par VoxLocal ;
-- `VoxLocal/Vendor/src/` : sources de whisper.cpp et llama.cpp ;
-- `VoxLocal/Vendor/bin/` : runtimes déjà compilés ;
-- `VoxLocal/assets/` et `VoxLocal/App/` : icônes et métadonnées du bundle ;
-- `VoxLocal/Website/` : site du projet ;
-- `RemoteScribe/PortableClient/` : client iOS et son projet Xcode.
+- `mac/VoxLocal/Vendor/src/` : sources de whisper.cpp et llama.cpp (sous-modules) ;
+- `mac/VoxLocal/Vendor/bin/` : runtimes compilés localement (non versionnés) ;
+- `mac/VoxLocal/assets/` et `mac/VoxLocal/App/` : icônes et métadonnées du bundle ;
+- `website/` : site du projet ;
+- `ios/` : client iOS et son projet Xcode `RemoteScribePortable.xcodeproj`.
 
 Les caches et produits générés (`.build`, `dist`, dossiers CMake temporaires)
-ont volontairement été retirés : ils ne sont pas du code source et sont
-recréés lors de la compilation.
+ne sont pas versionnés : ils ne sont pas du code source et sont recréés lors
+de la compilation. Voir aussi [`docs/mac-build.md`](../docs/mac-build.md).
 
 Les modèles Whisper/GGUF ne sont pas inclus. Ce sont des poids de modèles
 volumineux installés séparément, pas le code source de l'application.

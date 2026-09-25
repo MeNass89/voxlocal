@@ -42,7 +42,7 @@ que d'ajouter une nouvelle suite de tests.
 - `python3 -m unittest agent.test_agent_api tests.test_runpod_runtime -v` :
   13 tests verts, dont les nouveaux refus HTTP distant, mock hermétique et
   timeout RunPod.
-- `swiftc -parse source/PortableClient/RemoteScribePortable/PortableClientModel.swift` : OK.
+- `swiftc -parse PortableClientModel.swift` (dans `ios/RemoteScribePortable/`) : OK.
 
 Ces contrôles sont intentionnellement limités aux invariants modifiés ; les
 suites complètes déjà exécutées restent la référence historique dans
