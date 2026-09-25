@@ -45,3 +45,9 @@ runtime.env
 harness/**/node_modules/
 harness/.dsh-home/
 harness/profile/cordis.yml
+
+# Harness runtime state: drafts and audit contain clinical text once the real portal is connected
+harness/bridge/drafts.jsonl
+harness/bridge/state/
+harness/audit/
+harness/.venv/
