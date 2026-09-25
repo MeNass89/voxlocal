@@ -1,0 +1,2 @@
+# Optional Bonjour advertisement for automatic discovery from iOS.
+zeroconf>=0.132,<1

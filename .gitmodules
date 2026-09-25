@@ -1,0 +1,7 @@
+[submodule "mac/VoxLocal/Vendor/src/llama.cpp"]
+	path = mac/VoxLocal/Vendor/src/llama.cpp
+	url = https://github.com/ggml-org/llama.cpp
+	branch = master
+[submodule "mac/VoxLocal/Vendor/src/whisper.cpp"]
+	path = mac/VoxLocal/Vendor/src/whisper.cpp
+	url = https://github.com/ggml-org/whisper.cpp

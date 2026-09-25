@@ -1,0 +1,241 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00000000000000000000001 /* RemoteScribePortableApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000001 /* RemoteScribePortableApp.swift */; };
+		A00000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* ContentView.swift */; };
+		A00000000000000000000003 /* PortableClientModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* PortableClientModel.swift */; };
+		A00000000000000000000004 /* AudioStreamer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000004 /* AudioStreamer.swift */; };
+		A00000000000000000000005 /* RemoteProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000005 /* RemoteProtocol.swift */; };
+		A00000000000000000000006 /* FrameCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000006 /* FrameCodec.swift */; };
+		A00000000000000000000007 /* RemoteClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000007 /* RemoteClient.swift */; };
+		A00000000000000000000010 /* SecurePairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000010 /* SecurePairingStore.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A10000000000000000000001 /* RemoteScribePortableApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteScribePortableApp.swift; sourceTree = "<group>"; };
+		A10000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A10000000000000000000003 /* PortableClientModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortableClientModel.swift; sourceTree = "<group>"; };
+		A10000000000000000000004 /* AudioStreamer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioStreamer.swift; sourceTree = "<group>"; };
+		A10000000000000000000005 /* RemoteProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RemoteProtocol.swift; path = Core/Sources/RemoteProtocol.swift; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000006 /* FrameCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FrameCodec.swift; path = Core/Sources/FrameCodec.swift; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000007 /* RemoteClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = RemoteClient.swift; path = Core/Sources/RemoteClient.swift; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000008 /* RemoteScribePortable.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RemoteScribePortable.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A10000000000000000000010 /* SecurePairingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurePairingStore.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A30000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A20000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000002 /* RemoteScribePortable */,
+				A20000000000000000000003 /* Shared Core */,
+				A20000000000000000000004 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A20000000000000000000002 /* RemoteScribePortable */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000001 /* RemoteScribePortableApp.swift */,
+				A10000000000000000000002 /* ContentView.swift */,
+				A10000000000000000000003 /* PortableClientModel.swift */,
+				A10000000000000000000004 /* AudioStreamer.swift */,
+				A10000000000000000000010 /* SecurePairingStore.swift */,
+				A10000000000000000000009 /* Info.plist */,
+			);
+			path = RemoteScribePortable;
+			sourceTree = "<group>";
+		};
+		A20000000000000000000003 /* Shared Core */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000005 /* RemoteProtocol.swift */,
+				A10000000000000000000006 /* FrameCodec.swift */,
+				A10000000000000000000007 /* RemoteClient.swift */,
+			);
+			name = "Shared Core";
+			sourceTree = "<group>";
+		};
+		A20000000000000000000004 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000008 /* RemoteScribePortable.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A40000000000000000000001 /* RemoteScribePortable */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A60000000000000000000002 /* Build configuration list for PBXNativeTarget "RemoteScribePortable" */;
+			buildPhases = (
+				A30000000000000000000001 /* Sources */,
+				A30000000000000000000002 /* Frameworks */,
+				A30000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RemoteScribePortable;
+			productName = RemoteScribePortable;
+			productReference = A10000000000000000000008 /* RemoteScribePortable.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A50000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					A40000000000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = A60000000000000000000001 /* Build configuration list for PBXProject "RemoteScribePortable" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = fr;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				fr,
+				Base,
+			);
+			mainGroup = A20000000000000000000001;
+			productRefGroup = A20000000000000000000004 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A40000000000000000000001 /* RemoteScribePortable */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A30000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A30000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000001 /* RemoteScribePortableApp.swift in Sources */,
+				A00000000000000000000002 /* ContentView.swift in Sources */,
+				A00000000000000000000003 /* PortableClientModel.swift in Sources */,
+				A00000000000000000000004 /* AudioStreamer.swift in Sources */,
+				A00000000000000000000010 /* SecurePairingStore.swift in Sources */,
+				A00000000000000000000005 /* RemoteProtocol.swift in Sources */,
+				A00000000000000000000006 /* FrameCodec.swift in Sources */,
+				A00000000000000000000007 /* RemoteClient.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A70000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A70000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A70000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = RemoteScribePortable/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.voxlocal.remotescribe.portable;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A70000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = RemoteScribePortable/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.voxlocal.remotescribe.portable;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A60000000000000000000001 /* Build configuration list for PBXProject "RemoteScribePortable" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A70000000000000000000001 /* Debug */,
+				A70000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A60000000000000000000002 /* Build configuration list for PBXNativeTarget "RemoteScribePortable" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A70000000000000000000003 /* Debug */,
+				A70000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A50000000000000000000001 /* Project object */;
+}

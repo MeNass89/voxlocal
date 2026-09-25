@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>fr</string>
+    <key>CFBundleDisplayName</key><string>VoxLocal</string>
+    <key>CFBundleExecutable</key><string>VoxLocal</string>
+    <key>CFBundleIconFile</key><string>VoxLocal</string>
+    <key>CFBundleIdentifier</key><string>com.voxlocal.desktop</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>VoxLocal</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>2.1.0</string>
+    <key>CFBundleVersion</key><string>3</string>
+    <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>LSUIElement</key><false/>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSMicrophoneUsageDescription</key><string>VoxLocal utilise le microphone uniquement pour transcrire vos dictées localement.</string>
+    <key>NSLocalNetworkUsageDescription</key><string>VoxLocal reçoit les dictées de vos appareils appairés sur le réseau Wi-Fi local.</string>
+    <key>NSBonjourServices</key>
+    <array><string>_remotescribe._tcp</string></array>
+    <key>NSHumanReadableCopyright</key><string>Copyright © 2026 VoxLocal</string>
+</dict>
+</plist>

@@ -1,0 +1,173 @@
+CAHIER DES CHARGES — REMOTE SCRIBE
+
+Dernière mise à jour : 24/08/2026
+
+RÈGLE DE MISE À JOUR
+
+À chaque modification de RemoteScribe, ajouter une ligne datée dans la section
+« Journal des évolutions » à la fin de ce fichier.
+
+
+1. BUT DU PROJET
+
+RemoteScribe permet d’utiliser le microphone d’un iPhone ou d’un iPad pour
+enregistrer une dictée et l’envoyer, sur le même réseau Wi-Fi, vers un Mac.
+
+Le Mac transmet ensuite l’audio au moteur choisi :
+- Superwhisper ;
+- VoxLocal.
+
+Le résultat doit pouvoir contenir :
+- la transcription brute ;
+- le texte final traité par l’IA ;
+- l’audio original réécoutable.
+
+
+2. ORGANISATION DU PROJET
+
+Core
+Contient le protocole commun, les messages réseau, la réception audio et la
+gestion des sessions.
+
+MacServer
+Contient le serveur exécuté sur le Mac et le pont vers Superwhisper.
+
+WebClient
+Contient la page utilisée dans Safari sur l’iPhone et la passerelle HTTPS en
+Python.
+
+PortableClient
+Contient le prototype de l’application native iPhone et iPad en SwiftUI.
+
+
+3. CAPACITÉS DE LA VERSION ACTUELLE
+
+Connexion et sécurité
+- La page fonctionne uniquement sur le réseau local.
+- Le Mac affiche un QR code stable pour ouvrir la page sur l’iPhone.
+- La page utilise HTTPS avec un certificat local.
+- Safari mémorise la clé d’accès, le profil et le nom du PC.
+- Chaque profil possède un identifiant et un secret aléatoires.
+- Une seule personne peut occuper un PC à la fois.
+- Le PC est libéré quand la page se déconnecte, après une inactivité ou quand
+  le serveur s’arrête.
+- La page tente de se reconnecter automatiquement après un redémarrage.
+
+Enregistrement
+- Le microphone de l’iPhone est capturé depuis Safari.
+- Le son est transformé en PCM mono 16 kHz, 16 bits.
+- L’audio est envoyé au Mac par morceaux pendant la dictée.
+- Le gros bouton microphone et le bouton START/STOP commandent
+  l’enregistrement.
+- Un compteur et un indicateur de niveau sonore sont affichés.
+- Le Mac reconstitue un fichier WAV valide.
+
+Traitement
+- Le backend Superwhisper importe automatiquement le WAV.
+- RemoteScribe attend la fin réelle du traitement IA de Superwhisper.
+- Le backend VoxLocal peut utiliser son moteur de transcription et son moteur
+  de traitement IA.
+- Le protocole transporte séparément la transcription brute et le texte final.
+
+Résultats et historique
+- Le texte IA est présenté par défaut.
+- Chaque résultat est affiché dans une petite carte déroulante.
+- Un bouton permet de passer du texte IA à la transcription brute.
+- Le texte affiché peut être copié.
+- Les résultats sont enregistrés durablement par profil.
+- L’historique réapparaît après une actualisation ou une réouverture de Safari.
+- Les dictées les plus récentes sont affichées en premier.
+- Les dictées plus anciennes sont chargées par groupes de 25.
+- Chaque dictée affiche sa date, son heure et sa durée.
+- Chaque profil ne peut consulter que son propre historique.
+- L’audio peut être réécouté depuis Safari.
+- Safari charge progressivement le WAV PCM sans conversion préalable.
+
+Interface Web
+- Le profil est réglé dans une barre latérale ouverte avec le logo en haut à
+  gauche.
+- La saisie du nom n’est plus effacée pendant que la personne écrit.
+- L’interface est adaptée à Safari sur iPhone.
+
+Application native iPhone et iPad
+- Un prototype SwiftUI existe déjà.
+- Il détecte le Mac avec Bonjour sur le réseau local.
+- Il capture le microphone nativement.
+- Il convertit l’audio en PCM mono 16 kHz.
+- Il envoie START, les morceaux audio et STOP au Mac.
+- Il reçoit un résultat de transcription.
+- Il ne possède pas encore les profils, l’historique, la réécoute audio ni
+  l’interface complète du WebClient.
+- Xcode complet doit encore être installé pour compiler, signer et installer
+  cette application sur un appareil réel.
+
+
+4. STOCKAGE ACTUEL
+
+Code du projet :
+/Users/nawfel/Projects/RemoteScribe
+
+Audios WAV RemoteScribe :
+/Users/nawfel/Library/Application Support/RemoteScribe/sessions/<UUID>/remote.wav
+
+Base de l’historique :
+/Users/nawfel/Library/Application Support/RemoteScribe/history/history.sqlite3
+
+Certificat et accès Web :
+/Users/nawfel/Library/Application Support/RemoteScribe/web
+
+Copies créées par Superwhisper :
+/Users/nawfel/Documents/superwhisper/recordings/<identifiant>/output.wav
+
+L’historique ne crée pas une troisième copie de l’audio. Il référence le WAV
+déjà présent dans le dossier sessions.
+
+
+5. LIMITES CONNUES
+
+- Le serveur doit encore être lancé ou relancé sur le Mac pour utiliser la
+  dernière version.
+- Le fonctionnement actuel exige que l’iPhone et le Mac puissent communiquer
+  sur le même réseau local.
+- Le profil Web dépend du secret conservé dans les données de Safari.
+- Il n’existe pas encore de procédure de récupération du profil sur un nouvel
+  iPhone ou après suppression complète des données Safari.
+- Les anciens audios créés avant l’historique ne sont pas automatiquement
+  attribués à un profil.
+- Les WAV ne sont pas compressés.
+- RemoteScribe et Superwhisper conservent actuellement chacun une copie du WAV.
+- Il n’existe pas encore de suppression automatique après une durée choisie.
+- L’application native n’est pas encore au même niveau que la page Web.
+
+
+6. EXIGENCES À CONSERVER LORS DES FUTURES MODIFICATIONS
+
+- Ne jamais mélanger les historiques de deux profils.
+- Ne jamais exposer directement un chemin de fichier du Mac à un autre profil.
+- Garder les données et les audios en local sauf décision explicite contraire.
+- Conserver séparément le texte brut et le texte traité par l’IA.
+- Attendre la vraie fin du traitement IA avant d’enregistrer le résultat.
+- Ne pas créer de copie audio supplémentaire sans raison.
+- Préserver une utilisation simple : ouvrir, se connecter, enregistrer,
+  arrêter et consulter le résultat.
+- Sauvegarder les fichiers existants avant une modification importante.
+- Tester la compatibilité RemoteScribe, Superwhisper et VoxLocal après une
+  modification du protocole commun.
+
+
+7. JOURNAL DES ÉVOLUTIONS
+
+23/08/2026 — Création du cahier des charges et description complète des
+capacités actuelles du projet.
+
+24/08/2026 — Ajout d’une première vitrine Web immersive présentant
+l’écosystème complet : VoxLocal, dictée locale, RemoteScribe, historique,
+moteurs IA locaux, trajectoire Windows et offre Business pour les hôpitaux.
+
+25/08/2026 — Refonte du PortableClient en application SwiftUI native iPhone et
+iPad : découverte Bonjour et connexion manuelle, code d’appairage, sélection
+du moteur annoncée par le serveur, états complets, capture PCM 16 kHz,
+START/STOP, niveau audio, résultats brut/final et historique local des textes.
+Le protocole et le serveur acceptent désormais un moteur optionnel par session
+tout en conservant le moteur par défaut pour les anciens clients et le
+WebClient.

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleDevelopmentRegion</key><string>fr</string>
+    <key>CFBundleDisplayName</key><string>Remote Scribe</string>
+    <key>CFBundleExecutable</key><string>RemoteScribeMac</string>
+    <key>CFBundleIconFile</key><string>RemoteScribe.icns</string>
+    <key>CFBundleIdentifier</key><string>com.voxlocal.remotescribe.mac</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>Remote Scribe</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>LSUIElement</key><true/>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSLocalNetworkUsageDescription</key><string>Remote Scribe reçoit les dictées des iPhone approuvés sur le réseau Wi-Fi local.</string>
+    <key>NSBonjourServices</key><array><string>_remotescribe._tcp</string></array>
+</dict></plist>

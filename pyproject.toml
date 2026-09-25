@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voxlocal-remote-scribe-host"
+version = "0.1.0"
+description = "ZDR Remote Scribe host compatible with the reconstructed RemoteScribeCore protocol"
+requires-python = ">=3.11"
+
+[project.scripts]
+voxlocal-agent = "agent.voxlocal_agent_api:main"
+
+[tool.setuptools.packages.find]
+include = ["agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

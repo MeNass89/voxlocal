@@ -1,0 +1,7 @@
+.DS_Store
+dist/
+.build/
+build-native/
+Vendor/build/
+**/__pycache__/
+*.py[cod]

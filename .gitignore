@@ -1,0 +1,42 @@
+# macOS / Xcode
+.DS_Store
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+.build/
+build-native/
+.build-dmg/
+dist/
+*.dmg
+*.ipa
+*.xcarchive
+
+# Vendored native runtimes: built locally by mac/VoxLocal/build-runtimes.sh
+mac/VoxLocal/Vendor/bin/
+mac/VoxLocal/Vendor/build/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Node (website)
+node_modules/
+.next/
+.wrangler/
+website/dist/
+
+# Secrets and local state: never commit
+*.pem
+*.key
+*.p12
+*.crt
+.env
+.env.*
+api-token
+runtime.env
+
+# Agent workspaces
+.superpowers/
