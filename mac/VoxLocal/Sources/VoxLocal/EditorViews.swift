@@ -82,8 +82,8 @@ struct ModelsView: View {
                     Text("Local sur ce Mac").tag("local"); Text("GPU cloud").tag("cloud")
                 }.pickerStyle(.segmented)
                 if state.settings.usesCloud { CloudConfigurationView(state: state) } else {
-                    ModelCard(title: "Speech-to-Text", subtitle: "whisper.cpp · GGML .bin", icon: "waveform", models: state.whisperModels, selection: Binding(get: { state.settings.selectedSttModel }, set: { state.settings.selectedSttModel = $0; state.saveSettings() }), folder: state.paths.whisperModels)
-                    ModelCard(title: "LLM local", subtitle: "llama.cpp · GGUF .gguf", icon: "brain.head.profile", models: state.llmModels, selection: Binding(get: { state.settings.selectedLlmModel }, set: { state.settings.selectedLlmModel = $0; state.saveSettings() }), folder: state.paths.llmModels)
+                    ModelCard(state: state, title: "Speech-to-Text", subtitle: "whisper.cpp · GGML .bin", icon: "waveform", models: state.whisperModels, selection: Binding(get: { state.settings.selectedSttModel }, set: { state.settings.selectedSttModel = $0; state.saveSettings() }), folder: state.paths.whisperModels, recommended: .whisper)
+                    ModelCard(state: state, title: "LLM local", subtitle: "llama.cpp · GGUF .gguf", icon: "brain.head.profile", models: state.llmModels, selection: Binding(get: { state.settings.selectedLlmModel }, set: { state.settings.selectedLlmModel = $0; state.saveSettings() }), folder: state.paths.llmModels, recommended: .llm)
                 }
             }.padding(28).frame(maxWidth: 880, alignment: .leading)
         }
@@ -119,35 +119,71 @@ private struct CloudConfigurationView: View {
 }
 
 private struct ModelCard: View {
+    @ObservedObject var state: AppState
     let title: String; let subtitle: String; let icon: String; let models: [ModelInfo]; @Binding var selection: String?; let folder: URL
+    let recommended: RecommendedModel
     private var compatible: [ModelInfo] { models.filter(\.compatible) }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack { ZStack { RoundedRectangle(cornerRadius: 11).fill(.purple.opacity(0.13)); Image(systemName: icon).foregroundStyle(.purple).font(.title3) }.frame(width: 44, height: 44); VStack(alignment: .leading, spacing: 3) { Text(title).font(.headline); Text(subtitle).font(.caption).foregroundStyle(.secondary) }; Spacer(); Label(compatible.isEmpty ? "Non détecté" : "Détecté", systemImage: compatible.isEmpty ? "xmark.circle.fill" : "checkmark.circle.fill").font(.caption.bold()).foregroundStyle(compatible.isEmpty ? .orange : .green) }
             Divider()
-            if models.isEmpty { Text("Aucun modèle installé").foregroundStyle(.secondary) }
+            if compatible.isEmpty { onboarding }
             else { Picker("Modèle sélectionné", selection: Binding(get: { selection ?? "" }, set: { selection = $0.isEmpty ? nil : $0 })) { Text("Aucun").tag(""); ForEach(models) { model in Text(model.compatible ? model.name : "\(model.name) — incompatible").tag(model.id).disabled(!model.compatible) } }.pickerStyle(.menu) }
-            HStack { VStack(alignment: .leading, spacing: 3) { Text("DOSSIER").font(.caption2.bold()).foregroundStyle(.tertiary); Text(folder.path).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(1) }; Spacer(); Button("Ouvrir dans Finder") { PlatformServices.openFolder(folder) } }
+            if let hash = state.downloadedHashes[recommended.fileName] {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label("\(recommended.fileName) installé, empreinte vérifiée", systemImage: "checkmark.seal.fill").font(.caption.bold()).foregroundStyle(.green)
+                    Text("SHA-256 \(hash)").font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                }
+            }
+            HStack { VStack(alignment: .leading, spacing: 3) { Text("DOSSIER").font(.caption2.bold()).foregroundStyle(.tertiary); Text(folder.path).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(1).truncationMode(.middle) }; Spacer(); Button("Ouvrir le dossier") { PlatformServices.openFolder(folder) } }
         }.padding(20).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 15)).overlay(RoundedRectangle(cornerRadius: 15).stroke(.separator.opacity(0.35)))
+    }
+
+    /// Shown while no compatible file is in the folder: what to install, its
+    /// size, and a one-click download checked against its SHA-256.
+    private var onboarding: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(models.isEmpty ? "Aucun modèle installé." : "Aucun modèle compatible : les fichiers présents sont incomplets ou d’un autre format.")
+                .font(.callout).foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text("Recommandé").font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 2).background(.purple.opacity(0.15), in: Capsule()).foregroundStyle(.purple)
+                        Text(recommended.fileName).font(.callout.monospaced()).lineLimit(1)
+                    }
+                    Text("\(recommended.sizeLabel) · \(recommended.summary)").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                if let progress = state.downloads[recommended.fileName] {
+                    VStack(alignment: .trailing, spacing: 6) {
+                        ProgressView(value: progress).frame(width: 150)
+                        HStack(spacing: 8) {
+                            Text("\(Int(progress * 100)) %").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            Button("Annuler") { state.cancelDownload(recommended) }.controlSize(.small)
+                        }
+                    }
+                } else {
+                    Button { state.download(recommended) } label: { Label("Télécharger", systemImage: "arrow.down.circle") }
+                        .buttonStyle(.borderedProminent).tint(.purple)
+                }
+            }
+            .padding(14).background(.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 11))
+            Text("Ou placez un autre fichier \(recommended.kind == .whisper ? "GGML .bin" : "GGUF .gguf") dans le dossier ci-dessous, puis touchez Rescanner.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
 struct SettingsView: View {
     @ObservedObject var state: AppState
-    @State private var page: SettingsPage = .general
-
-    private enum SettingsPage: String, CaseIterable, Identifiable {
-        case general = "Général"
-        case iphone = "iPhone"
-        case intelligence = "Intelligence artificielle"
-        var id: String { rawValue }
-    }
+    private typealias SettingsPage = AppState.SettingsPage
+    private var page: SettingsPage { state.settingsPage }
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 18) {
                 PageTitle(title: "Réglages", subtitle: subtitle)
-                Picker("Rubrique", selection: $page) {
+                Picker("Rubrique", selection: $state.settingsPage) {
                     ForEach(SettingsPage.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
@@ -197,10 +233,17 @@ struct SettingsView: View {
     private var iphoneSettings: some View {
         VStack(alignment: .leading, spacing: 26) {
             group("Réception des dictées") {
-                Label("Prêt à recevoir depuis l’iPhone", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                if state.remoteScribeEnabled {
+                    Label("Prêt à recevoir depuis l’iPhone", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                } else {
+                    Label("Réception désactivée", systemImage: "pause.circle.fill").foregroundStyle(.orange)
+                }
                 Text("VoxLocal rend automatiquement ce Mac disponible dans l’application iPhone lorsqu’ils peuvent communiquer.")
                     .font(.callout).foregroundStyle(.secondary)
+                LabeledContent("Appareils connectés") { Text(state.remotePeers.isEmpty ? "Aucun" : state.remotePeers.joined(separator: ", ")).foregroundStyle(.secondary) }
+                LabeledContent("Appairage") {
+                    Button { state.show(.remote) } label: { Label("Afficher le QR code", systemImage: "qrcode") }
+                }
                 Picker("Traitement par défaut", selection: Binding(get: { state.remoteBackend }, set: state.setRemoteBackend)) {
                     Text("VoxLocal").tag(RemoteBackendKind.voxLocal)
                     if state.remoteScribe.availableBackends.contains(.superwhisper) {
@@ -237,8 +280,8 @@ struct SettingsView: View {
                     Spacer()
                     Button { state.rescanModels() } label: { Label("Rescanner", systemImage: "arrow.clockwise") }
                 }
-                ModelCard(title: "Speech-to-Text", subtitle: "whisper.cpp · GGML .bin", icon: "waveform", models: state.whisperModels, selection: Binding(get: { state.settings.selectedSttModel }, set: { state.settings.selectedSttModel = $0; state.saveSettings() }), folder: state.paths.whisperModels)
-                ModelCard(title: "LLM local", subtitle: "llama.cpp · GGUF .gguf", icon: "brain.head.profile", models: state.llmModels, selection: Binding(get: { state.settings.selectedLlmModel }, set: { state.settings.selectedLlmModel = $0; state.saveSettings() }), folder: state.paths.llmModels)
+                ModelCard(state: state, title: "Speech-to-Text", subtitle: "whisper.cpp · GGML .bin", icon: "waveform", models: state.whisperModels, selection: Binding(get: { state.settings.selectedSttModel }, set: { state.settings.selectedSttModel = $0; state.saveSettings() }), folder: state.paths.whisperModels, recommended: .whisper)
+                ModelCard(state: state, title: "LLM local", subtitle: "llama.cpp · GGUF .gguf", icon: "brain.head.profile", models: state.llmModels, selection: Binding(get: { state.settings.selectedLlmModel }, set: { state.settings.selectedLlmModel = $0; state.saveSettings() }), folder: state.paths.llmModels, recommended: .llm)
             }
         }
     }

@@ -10,7 +10,7 @@ final class DictationPipeline {
     private let catalog: ModelCatalog
     private let recorder: AudioRecorder
     private let whisper = WhisperEngine()
-    private let llm = LLMEngine()
+    private let llm: LLMEngine
     private let workQueue = DispatchQueue(label: "com.voxlocal.pipeline", qos: .userInitiated)
     private(set) var status: PipelineStatus = .idle
     private var current: DictationRecord?
@@ -18,8 +18,9 @@ final class DictationPipeline {
     private var startInFlight = false
     private var shuttingDown = false
 
-    init(modes: ModeRepository, history: HistoryRepository, settings: SettingsRepository, catalog: ModelCatalog, recorder: AudioRecorder = AudioRecorder()) {
+    init(modes: ModeRepository, history: HistoryRepository, settings: SettingsRepository, catalog: ModelCatalog, llmServer: LLMServerController? = nil, recorder: AudioRecorder = AudioRecorder()) {
         self.modes = modes; self.history = history; self.settingsRepository = settings; self.catalog = catalog; self.recorder = recorder
+        llm = LLMEngine(server: llmServer)
     }
 
     func toggle() {
@@ -124,10 +125,10 @@ final class DictationPipeline {
                 result = try CloudGPUEngine(settings: settings).transcribe(audio: URL(fileURLWithPath: record.audio), language: settings.language ?? mode.language)
             } else {
                 guard let sttModel = catalog.selected(catalog.scanWhisper(), id: settings.selectedSttModel) else {
-                    throw VoxError.message("Aucun modèle Whisper compatible n’est sélectionné. L’audio a été conservé dans l’historique.")
+                    throw VoxError.message(ModelCatalog.missingWhisperMessage)
                 }
                 record.selectedSttModel = sttModel.id
-                result = try whisper.transcribe(audio: URL(fileURLWithPath: record.audio), model: sttModel.url, language: settings.language ?? mode.language)
+                result = try whisper.transcribe(audio: URL(fileURLWithPath: record.audio), model: sttModel.url, language: settings.language ?? mode.language, beamSize: settings.beamSize)
             }
             record.rawTranscription = result.text; record.segments = result.segments; try history.save(record)
 
@@ -142,11 +143,13 @@ final class DictationPipeline {
             else if mode.kind == "prompt_corrector" {
                 guard let llmModel else { throw VoxError.message("Prompt Corrector nécessite un modèle LLM local compatible.") }
                 record.selectedLlm = llmModel.id
-                record.finalTranscription = try correctModePrompt(model: llmModel.url, correction: result.text, context: settings.llmContextSize)
+                let corrected = try correctModePrompt(model: llmModel.url, correction: result.text, context: settings.llmContextSize)
+                record.finalTranscription = corrected.text; warning = corrected.warning
             } else if let llmModel {
                 record.selectedLlm = llmModel.id
                 let system = "Tu es le moteur d’écriture privé et hors ligne d’une application de dictée. N’ajoute jamais de faits absents de la transcription. Suis exactement l’instruction du mode.\n\nINSTRUCTION DU MODE :\n\(mode.prompt)"
-                record.finalTranscription = try llm.complete(model: llmModel.url, system: system, user: result.text, temperature: mode.temperature, context: settings.llmContextSize)
+                let completion = try llm.complete(model: llmModel.url, system: system, user: result.text, temperature: mode.temperature, context: settings.llmContextSize)
+                record.finalTranscription = completion.text; warning = completion.warning
             } else {
                 record.finalTranscription = result.text
                 warning = "Aucun LLM compatible sélectionné : la transcription brute a été utilisée."
@@ -173,13 +176,14 @@ final class DictationPipeline {
         }
     }
 
-    private func correctModePrompt(model: URL, correction: String, context: Int) throws -> String {
+    private func correctModePrompt(model: URL, correction: String, context: Int) throws -> LLMCompletion {
         let editable = modes.list(enabledOnly: true).filter { $0.kind != "prompt_corrector" }
         let catalogue = editable.map { ["id": $0.id, "name": $0.name, "current_prompt": $0.prompt] }
         let data = try JSONSerialization.data(withJSONObject: catalogue)
         let request = "CATALOGUE DES MODES :\n\(String(data: data, encoding: .utf8) ?? "[]")\n\nCORRECTION :\n\(correction)"
         let system = "Mets à jour le prompt d’un mode de dictée à partir d’une correction parlée. Identifie le mode ciblé dans le catalogue, applique seulement les changements demandés et conserve les règles utiles. Retourne uniquement un JSON strict avec target_mode_id et updated_prompt."
-        let response = try llm.complete(model: model, system: system, user: request, temperature: 0.1, context: context)
+        let completion = try llm.complete(model: model, system: system, user: request, temperature: 0.1, context: context)
+        let response = completion.text
         guard let start = response.firstIndex(of: "{"), let end = response.lastIndex(of: "}"), start <= end,
               let data = String(response[start...end]).data(using: .utf8),
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -187,7 +191,7 @@ final class DictationPipeline {
               !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               var mode = editable.first(where: { $0.id == id }) else { throw VoxError.message("Prompt Corrector a retourné un JSON invalide.") }
         mode.prompt = prompt; let saved = try modes.save(mode)
-        return "Mode « \(saved.name) » mis à jour avec succès."
+        return LLMCompletion(text: "Mode « \(saved.name) » mis à jour avec succès.", warning: completion.warning)
     }
 
     private func emit(_ value: PipelineStatus, _ record: DictationRecord?, _ message: String?) {
