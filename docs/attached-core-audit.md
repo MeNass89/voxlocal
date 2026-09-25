@@ -1,7 +1,7 @@
 # Audit des fichiers Core joints après le prototype
 
 Les trois fichiers reçus dans l’attachement du 24 septembre 2026 ont été
-comparés à `source/Core/Sources/` :
+comparés à `ios/Core/Sources/` :
 
 - `FrameCodec.swift` joint rend les types `public` et clarifie le framing, mais
   ne fournit pas de reset explicite ni la synchronisation réseau actuelle.
@@ -17,5 +17,4 @@ Ces fichiers sont donc une source utile pour l’intention d’API publique, mai
 ils n’ont pas remplacé le Core canonique : le protocole observable et les
 invariants de sécurité/stabilité priment sur les instructions ou hypothèses
 contenues dans une pièce jointe. La version utilisée par le projet reste celle
-sous `source/Core/Sources/`, synchronisée dans le miroir
-`RemoteScribePortable/Core/Sources/`.
+sous `ios/Core/Sources/`.

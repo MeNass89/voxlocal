@@ -43,15 +43,11 @@ aux composants Apple natifs.
 Vérifications du 24 septembre 2026 :
 
 ```bash
-swiftc -parse-as-library -parse source/PortableClient/RemoteScribePortable/ContentView.swift
-xcodebuild -quiet -project source/PortableClient/RemoteScribePortable.xcodeproj \
+swiftc -parse-as-library -parse ios/RemoteScribePortable/ContentView.swift
+xcodebuild -quiet -project ios/RemoteScribePortable.xcodeproj \
   -scheme RemoteScribePortable -configuration Debug \
   -destination 'generic/platform=iOS' \
   -derivedDataPath /tmp/voxlocal-ios-derived CODE_SIGNING_ALLOWED=NO build
-xcodebuild -quiet -project desktop-source/VoxLocal-Source-Complet/RemoteScribe/PortableClient/RemoteScribePortable.xcodeproj \
-  -scheme RemoteScribePortable -configuration Debug \
-  -destination 'generic/platform=iOS' \
-  -derivedDataPath /tmp/voxlocal-export-ios-derived CODE_SIGNING_ALLOWED=NO build
 ```
 
 Les deux builds réussissent avec Xcode 27.0 et le SDK iOS 27.0. Le runtime

@@ -24,7 +24,7 @@ Les deux dernières tâches sont explicitement séparées selon le coût cogniti
 
 ### 4. Choix d'implémentation
 
-Le dossier [`source`](../source) est la base Xcode canonique ; `RemoteScribePortable/` est un miroir compatible avec le chemin de l’archive. Les trois fichiers Core manquants y ont été recréés avec les API appelées par le client. `server/voxlocal_server.py` est l’hôte de référence Windows/macOS : TLS obligatoire avec un GPU, mode mock local explicitement marqué, annonce DNS-SD facultative et quotas. `windows/` garde le codec et un hôte legacy pour tests synthétiques.
+Le dossier [`ios`](../ios) (alors `source/`) est la base Xcode canonique ; le miroir `RemoteScribePortable/` de l’archive n’est plus versionné. Les trois fichiers Core manquants y ont été recréés avec les API appelées par le client. `server/voxlocal_server.py` est l’hôte de référence Windows/macOS : TLS obligatoire avec un GPU, mode mock local explicitement marqué, annonce DNS-SD facultative et quotas. `windows/` garde le codec et un hôte legacy pour tests synthétiques.
 
 La persistance applicative serveur est absente par défaut : buffer audio en mémoire, suppression à la fin, aucun texte dans les logs. Le GPU reste soumis à un DPA/ZDR vérifié séparément. L'historique iOS est mémoire seule par défaut ; sa conservation est opt-in dans le Keychain `ThisDeviceOnly`, avec suppression confirmée ou tombstone.
 
@@ -38,8 +38,8 @@ Les changements sont acceptés uniquement après une vérification reproductible
 python3 -m unittest discover -s windows -p 'test_*.py' -v
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 python3 -m py_compile server/voxlocal_server.py windows/*.py
-swiftc -parse source/Core/Sources/*.swift source/PortableClient/RemoteScribePortable/*.swift
-swiftc -typecheck source/Core/Sources/*.swift source/PortableClient/RemoteScribePortable/SecurePairingStore.swift
+swiftc -parse ios/Core/Sources/*.swift ios/RemoteScribePortable/*.swift
+swiftc -typecheck ios/Core/Sources/*.swift ios/RemoteScribePortable/SecurePairingStore.swift
 ```
 
 Le build Xcode final doit encore être exécuté sur une machine équipée du SDK iOS et d'une Team Apple ; l'environnement de travail ne fournit que les Command Line Tools.

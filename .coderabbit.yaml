@@ -1,0 +1,46 @@
+language: en-US
+tone_instructions: "Be direct. Flag real bugs, protocol divergences, security issues and races. Skip style nitpicks unless they affect correctness."
+early_access: false
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_filters:
+    - "!mac/VoxLocal/Vendor/**"
+    - "!website/**"
+    - "!docs/superpowers/**"
+    - "!**/*.lock"
+    - "!**/pnpm-lock.yaml"
+  path_instructions:
+    - path: "RemoteScribe/Core/**"
+      instructions: &wire "This is the Remote Scribe v1 wire protocol. Flag any divergence between implementations (frame layout, sequence numbering, framesSent semantics, state machine), any path that could persist audio or text on the Python hosts, and any unbounded read or buffer."
+    - path: "ios/Core/**"
+      instructions: *wire
+    - path: "server/**"
+      instructions: *wire
+    - path: "windows/**"
+      instructions: *wire
+    - path: "agent/**"
+      instructions: &agent "Loopback agent API and GPU runtime. Flag any way a secret can reach argv, logs, error bodies, or a non-HTTPS remote; any missing timeout; any JSON parsing that accepts duplicates or non-finite numbers."
+    - path: "cloud/**"
+      instructions: *agent
+    - path: "ios/RemoteScribePortable/**"
+      instructions: &ui "Hospital dictation UI. Flag state-machine races, stale-callback bugs, Keychain error handling that silently succeeds, and any state encoded by colour alone."
+    - path: "mac/VoxLocal/Sources/**"
+      instructions: *ui
+    - path: "windows/*.ps1"
+      instructions: &ps "PowerShell launchers/installers. Flag argument injection, secrets on the command line, and paths that could escape the install root."
+    - path: "agent/*.ps1"
+      instructions: *ps
+    - path: "server/*.ps1"
+      instructions: *ps
+
+chat:
+  auto_reply: true
