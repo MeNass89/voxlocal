@@ -5,8 +5,53 @@ manual connection. Bonjour results are displayed as untrusted candidates; there 
 no automatic connection to an arbitrary service. TLS is enabled by default for new
 installations and is sent to the Core client for both discovery and manual paths.
 Existing installations keep their explicit transport preference so an upgrade does
-not silently break a managed deployment. The server certificate must chain to an
-iOS trusted CA; certificate pinning remains a deployment requirement for PHI.
+not silently break a managed deployment. Server identity is checked by certificate
+pinning with trust-on-first-use confirmation (see "Confiance serveur" below).
+
+## Confiance serveur
+
+The client replaces the default TLS certificate check with its own decision,
+taken inside `sec_protocol_options_set_verify_block` during the TLS 1.3
+handshake. The connection never reaches `.ready` for a refused identity, so no
+PAIR frame, pairing code or audio byte leaves the phone. The regression suite
+asserts this against a Python TLS fixture that records zero application bytes.
+
+- **Fingerprint.** SHA-256 of the server's leaf certificate in DER form (the
+  certificate, not the SPKI). It is shown as uppercase hex in groups of four,
+  the format VoxLocal displays on the Mac, and carried as base64 in error
+  messages and in the Keychain.
+- **Pin storage.** One device-only Keychain item per server, service
+  `com.voxlocal.remotescribe.portable`, account `pin:<key>`, where `<key>` is
+  the Bonjour service name for a discovered server and `host:port` for a manual
+  connection. If the Keychain refuses the write, the pin is kept in memory for
+  the current run and the UI says so. An unreadable pin (locked device) stops
+  the connection instead of falling back to a first-use prompt.
+- **Pinned server.** Only the pinned certificate is accepted; hostname and CA
+  checks are skipped on purpose, because the pinned certificate is the server's
+  identity. A different certificate fails with `pinMismatch` and the message
+  "L’identité du serveur a changé. Vérifiez le poste avant de réessayer." The
+  pin is not replaced automatically.
+- **First use (TOFU).** Without a pin, a certificate that chains to a CA trusted
+  by iOS is accepted. Otherwise the connection fails with `untrustedServer` and
+  the sheet "Vérifier l’identité du serveur" shows the fingerprint. "Faire
+  confiance et connecter" stores the pin and reconnects; "Annuler" (or swiping
+  the sheet away) stores nothing.
+- **MDM CA path.** A hospital that installs its own CA profile on managed
+  iPhones gets system-trusted certificates: the first connection needs no
+  confirmation and no pin is stored, so the CA stays in charge of rotation.
+- **Forget.** The connection sheet shows "Identité épinglée · <4 premiers
+  groupes>" for the current server and a destructive "Oublier ce serveur"
+  action behind a confirmation dialog. It deletes the pin and disconnects; the
+  next connection asks for confirmation again. Use it after a legitimate
+  certificate change on the server, once the new fingerprint has been checked
+  on the Mac.
+
+To screenshot the confirmation sheet without a server, build Debug with
+`SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG` (the project does not define it)
+and launch with `-VoxLocalDebugTrustSheet 1`; the hook is compiled out
+otherwise. Evidence: `docs/superpowers/evidence/2026-09-25-ios-trust-sheet.png`.
+
+## Audio and sessions
 
 Audio stop closes tap admission, drains already accepted PCM and converter output,
 then sends STOP. Start/stop are generation guarded, permission callbacks are stale

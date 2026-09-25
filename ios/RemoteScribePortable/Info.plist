@@ -6,8 +6,8 @@
     <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.1</string>
-    <key>CFBundleVersion</key><string>2</string>
+    <key>CFBundleShortVersionString</key><string>1.2</string>
+    <key>CFBundleVersion</key><string>3</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Remote Scribe utilise le microphone pour envoyer votre dictée au serveur choisi.</string>
     <key>NSLocalNetworkUsageDescription</key><string>Remote Scribe détecte et contacte le serveur VoxLocal ou Superwhisper sur votre Wi-Fi local.</string>
