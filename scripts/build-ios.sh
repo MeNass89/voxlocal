@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="$ROOT_DIR/ios/RemoteScribePortable.xcodeproj"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-DESTINATION="${DESTINATION:-generic/platform=iOS}"
 DERIVED_DATA_PATH="${VOXLOCAL_IOS_DERIVED_DATA_PATH:-$ROOT_DIR/build/DerivedData}"
 
 if [[ ! -d "$PROJECT" ]]; then
@@ -16,16 +15,31 @@ if ! command -v xcodebuild >/dev/null 2>&1 || ! xcodebuild -version >/dev/null 2
   exit 2
 fi
 
-XCODE_ARGS=(
-  -project "$PROJECT"
-  -scheme RemoteScribePortable
-  -configuration "$CONFIGURATION"
-  -destination "$DESTINATION"
-  -derivedDataPath "$DERIVED_DATA_PATH"
-  build
-)
 if [[ -n "${TEAM_ID:-}" ]]; then
-  XCODE_ARGS+=("DEVELOPMENT_TEAM=$TEAM_ID")
+  # Signed device build: -destination (e.g. platform=iOS,id=<UDID>) is only
+  # honoured with a scheme, so this path keeps Xcode's scheme-based build.
+  XCODE_ARGS=(
+    -project "$PROJECT"
+    -scheme RemoteScribePortable
+    -configuration "$CONFIGURATION"
+    -destination "${DESTINATION:-generic/platform=iOS}"
+    -derivedDataPath "$DERIVED_DATA_PATH"
+    build
+    "DEVELOPMENT_TEAM=$TEAM_ID"
+  )
+else
+  # Unsigned build (CI, first check): -target needs no shared scheme (the project
+  # ships none). -derivedDataPath requires a scheme, so outputs go to the same
+  # Products directory through SYMROOT/OBJROOT.
+  XCODE_ARGS=(
+    -project "$PROJECT"
+    -target RemoteScribePortable
+    -configuration "$CONFIGURATION"
+    -sdk iphoneos
+    build
+    "SYMROOT=$DERIVED_DATA_PATH/Build/Products"
+    "OBJROOT=$DERIVED_DATA_PATH/Build/Intermediates.noindex"
+  )
 fi
 if [[ -n "${CODE_SIGNING_ALLOWED:-}" ]]; then
   XCODE_ARGS+=("CODE_SIGNING_ALLOWED=$CODE_SIGNING_ALLOWED")

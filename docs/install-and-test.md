@@ -141,3 +141,46 @@ Pour le déploiement, le service reçoit séparément `VOXLOCAL_GPU_URL`,
 `VOXLOCAL_CLEAN_URL` et `VOXLOCAL_LLM_URL` ainsi que leurs tokens et modèles.
 Le poste ne reçoit jamais le contenu de `/workspace/voxlocal/api-token` ; ce
 fichier reste lu à l'intérieur du Pod RunPod par son bootstrap.
+
+## CI
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) tourne à chaque push
+sur `main` et sur chaque pull request. Un nouveau push sur la même branche
+annule le run en cours. Trois jobs :
+
+- **`python-linux`** (`ubuntu-latest`, Python 3.11 et 3.12) : les trois suites
+  `unittest` (`windows/`, `tests/`, `agent/`) et `py_compile` des modules
+  Python. Les tests Swift (`tests/test_swift_core.py`,
+  `tests/test_real_host_interop.py`) se sautent eux-mêmes hors macOS.
+- **`python-windows`** (`windows-latest`, Python 3.12) : les mêmes suites,
+  puis l’analyse syntaxique de chaque `*.ps1` par PowerShell 7 et par
+  Windows PowerShell 5.1. Ensuite un vrai passage de l’installateur :
+  `install-runtime.ps1 -InstallRoot $env:RUNNER_TEMP\voxlocal -MockTask`
+  (sans `-RegisterScheduledTask`, donc aucune tâche planifiée), vérification
+  du manifeste et de l’import `agent.voxlocal_agent_api` depuis le venv créé,
+  puis `uninstall-runtime.ps1 -Confirm:$false` et vérification que le dossier
+  a disparu. Enfin `new-tls-identity.ps1` génère une identité dans
+  `$env:RUNNER_TEMP\tls` avec l’`openssl.exe` de Git for Windows ; le job
+  vérifie les deux fichiers et que l’empreinte affichée égale le SHA-256 du
+  certificat DER.
+- **`macos`** (`macos-26`, Xcode 26.6, sans les sous-modules `Vendor/`) :
+  `swift test` du paquet `RemoteScribe`, `swift build -c release --product
+  VoxLocal`, les trois suites Python (c’est ici que tournent vraiment la
+  régression du Core Swift, la fixture TLS avec épinglage et l’interop contre
+  le vrai `RemoteScribeHost`), puis `CODE_SIGNING_ALLOWED=NO
+  ./scripts/build-ios.sh` (build `iphoneos` non signé). Les dossiers `.build`
+  SwiftPM sont mis en cache, clé = empreinte des deux `Package.swift`. Un
+  premier run à froid peut prendre 15 minutes ; la limite est 45 minutes.
+
+Pour reproduire le job macOS en local :
+
+```bash
+(cd RemoteScribe && swift test)
+(cd mac/VoxLocal && swift build -c release --product VoxLocal)
+for suite in windows tests agent; do python3 -m unittest discover -s "$suite" -p 'test_*.py' -v; done
+CODE_SIGNING_ALLOWED=NO ./scripts/build-ios.sh
+```
+
+Sans `TEAM_ID`, `scripts/build-ios.sh` compile la cible
+`RemoteScribePortable` pour le SDK `iphoneos`, sans schéma ni destination ;
+avec `TEAM_ID`, il garde le build par schéma et honore `DESTINATION`.
