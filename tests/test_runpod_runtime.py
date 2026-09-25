@@ -492,7 +492,11 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(sample["completion_tokens"], 40)
             expected = 40 / (sample["latency_ms"] / 1000)
             self.assertAlmostEqual(sample["tokens_per_second"], expected, delta=expected * 0.02)
-        self.assertAlmostEqual(chat["tokens_per_second"]["p50"], 40 / (chat["latency_ms"]["p50"] / 1000), delta=chat["tokens_per_second"]["p50"] * 0.02)
+        # p50 of tokens/s and p50 of latency are medians of different samples
+        # (nearest rank on each series), so only the ordering is guaranteed.
+        rates = [sample["tokens_per_second"] for sample in chat["samples"]]
+        self.assertEqual(chat["tokens_per_second"]["p95"], round(max(rates), 2))
+        self.assertIn(chat["tokens_per_second"]["p50"], [round(r, 2) for r in rates])
         self.assertNotIn("tokens_per_second", ops[("voice", "audio_transcriptions_10s")])
 
     def test_failed_samples_are_excluded_from_statistics(self):
