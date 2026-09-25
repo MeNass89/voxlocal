@@ -9,7 +9,7 @@ un coffre de secrets (Credential Manager/DPAPI ou équivalent) et un wrapper sig
 ## Pré-requis
 
 - Windows 10/11 x64, PowerShell 5.1 ou plus récent ;
-- Python 3.11+ déjà installé et accessible par `python`, `python3` ou `py -3.11` ;
+- Python 3.11+ déjà installé et accessible par `python`, `python3` ou `py -3` ;
 - droits administrateur pour le chemin ProgramData, les tâches et le pare-feu ;
 - `openssl.exe` pour générer l’identité TLS de l’hôte : celui de Git for
   Windows (`C:\Program Files\Git\usr\bin\openssl.exe`), un `openssl` du
@@ -54,7 +54,6 @@ installations suivantes et ne laisse la clé lisible que par le compte courant :
   -RegisterScheduledTask -ScheduledTask Server `
   -BindAddress 10.42.5.20 `
   -TlsDir C:\ProgramData\VoxLocal\tls `
-  -TlsClientCA C:\VoxLocal\certs\hospital-client-ca.pem `
   -GpuCAFile C:\VoxLocal\certs\runpod-ca.pem
 ```
 
@@ -66,6 +65,12 @@ serveur : la comparer avec celle de l’installateur avant de l’approuver. Pou
 régénérer l’identité, lancer `.\windows\new-tls-identity.ps1 -OutputDir
 C:\ProgramData\VoxLocal\tls -Force` ; chaque iPhone devra approuver la nouvelle
 empreinte.
+
+mTLS (après enrôlement des iPhones, non livré) : `-TlsClientCA
+C:\VoxLocal\certs\hospital-client-ca.pem` rend le certificat client
+obligatoire. L’application iPhone ne présente aujourd’hui aucune identité
+client ; activer cette option avant l’enrôlement fait échouer la poignée de
+main TLS avant la validation de l’empreinte et l’appairage.
 
 Un certificat émis par l’IT reste possible avec `-TlsCert`/`-TlsKey` à la place
 de `-TlsDir` (les deux sont exclusifs). Le script refuse wildcard/loopback en

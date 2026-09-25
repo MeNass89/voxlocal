@@ -49,6 +49,8 @@ final class AppState: ObservableObject {
     @Published var selectedModeID: String?
     @Published var remoteScribeStatus = "Démarrage…"
     @Published var remoteScribeEnabled = true
+    /// Listener state; the toggle alone does not mean the Mac can receive.
+    @Published var remoteScribeRunning = false
     @Published var remoteBackend: RemoteBackendKind = .voxLocal
     /// Display form ("ABCD-2345"); `remoteScribe.pairingCode` is the dashless wire value.
     @Published var remotePairingCode = ""
@@ -115,6 +117,7 @@ final class AppState: ObservableObject {
             self.remotePairingURL = self.remoteScribe.pairingURL
         }
         remoteScribe.onPeersChanged = { [weak self] names in self?.remotePeers = names }
+        remoteScribe.onRunningChanged = { [weak self] running in self?.remoteScribeRunning = running }
         remoteBackend = remoteScribe.defaultBackend
         remoteScribe.start()
     }

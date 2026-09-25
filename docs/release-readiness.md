@@ -49,6 +49,8 @@ hôte. Pour RunPod, copier le bootstrap et utiliser uniquement les contrôles
 `/v1/models` avec un token Pod-local ; aucun endpoint ou modèle n’est inventé
 dans le dépôt.
 
+L’app Mac exige macOS 15 ou plus récent (`LSMinimumSystemVersion` 15.0).
+
 Le DMG de démonstration doit être régénéré après toute modification de la source
 Mac :
 

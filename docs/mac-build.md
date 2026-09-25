@@ -12,6 +12,8 @@ Whisper/LLM locaux. L’API agent Python (`agent/voxlocal_agent_api.py`) est un
 contrat HTTP loopback séparé. Elle ne doit pas être présentée comme le serveur
 Swift ni démarrée silencieusement par l’interface.
 
+VoxLocal et `RemoteScribeCore` exigent macOS 15 ou plus récent (import de l’identité TLS en mémoire seulement, `kSecImportToMemoryOnly`).
+
 ## Sous-modules et runtimes natifs
 
 `mac/VoxLocal/Vendor/src/whisper.cpp` et `mac/VoxLocal/Vendor/src/llama.cpp`

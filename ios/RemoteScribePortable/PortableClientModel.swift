@@ -277,20 +277,24 @@ final class PortableClientModel: ObservableObject {
 
     /// Applies a link read from the poste's QR code, or pasted: the code goes to the
     /// Keychain, the fingerprint becomes the pin of that Bonjour name, and the app
-    /// connects as soon as the poste is visible on the network. The poste's own
-    /// screen is the trust anchor, so a different stored pin is replaced.
+    /// connects as soon as the poste is visible on the network. First use is
+    /// automatic; a link never replaces a different stored pin, because anyone
+    /// can print a QR code: the user must forget the poste first.
     /// Returns a message for the user when the link cannot be applied now.
     func applyPairingLink(_ link: PairingLink) -> String? {
         guard activeSessionID == nil, ![.starting, .recording, .stopping, .processing].contains(phase) else {
             return "Terminez la dictée en cours avant d’appairer un poste."
+        }
+        let key = link.serverName
+        let previous = memoryPins[key] ?? (try? SecurePairingStore.loadData(account: Keys.pin(key)))
+        if Self.pinConflict(previous: previous, incoming: link.fingerprint) {
+            return "Ce poste a déjà une empreinte différente. Oubliez d’abord « \(key) » dans les réglages de connexion, puis rescannez."
         }
         if isPaired || isBusy { disconnect() }
         startDiscovery()
         pairingCode = link.code
         savePairingCode()
         useTLS = true
-        let key = link.serverName
-        let previous = memoryPins[key] ?? (try? SecurePairingStore.loadData(account: Keys.pin(key)))
         do {
             try SecurePairingStore.saveData(link.fingerprint, account: Keys.pin(key))
             memoryPins[key] = nil
@@ -301,11 +305,16 @@ final class PortableClientModel: ObservableObject {
         pendingLinkServerName = key
         errorText = nil
         if phase == .failed { phase = .searching }
-        connectionMessage = previous != nil && previous != link.fingerprint
-            ? "Empreinte de « \(key) » mise à jour depuis le code du poste. Recherche sur ce Wi-Fi…"
-            : "Code enregistré. Recherche de « \(key) » sur ce Wi-Fi…"
+        connectionMessage = "Code enregistré. Recherche de « \(key) » sur ce Wi-Fi…"
         connectPendingLinkServerIfFound()
         return nil
+    }
+
+    /// A pairing link may set a pin on first use or confirm the same one, never
+    /// silently replace a different stored pin.
+    nonisolated static func pinConflict(previous: Data?, incoming: Data) -> Bool {
+        guard let previous else { return false }
+        return previous != incoming
     }
 
     private func connectPendingLinkServerIfFound() {
@@ -314,6 +323,17 @@ final class PortableClientModel: ObservableObject {
                 ?? servers.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })
         else { return }
         pendingLinkServerName = nil
+        // The case-insensitive fallback may match a Bonjour name that differs from
+        // the link's; connect(to:) looks the pin up under the discovered name.
+        if server.name != name,
+           let pin = memoryPins[name] ?? (try? SecurePairingStore.loadData(account: Keys.pin(name))) {
+            do {
+                try SecurePairingStore.saveData(pin, account: Keys.pin(server.name))
+                memoryPins[server.name] = nil
+            } catch {
+                memoryPins[server.name] = pin
+            }
+        }
         connect(to: server)
     }
 

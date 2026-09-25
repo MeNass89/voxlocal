@@ -93,17 +93,46 @@ $certPath = Join-Path $dir 'server.cert.pem'
 $hasKey = Test-Path -LiteralPath $keyPath -PathType Leaf
 $hasCert = Test-Path -LiteralPath $certPath -PathType Leaf
 
+$icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+$account = "${env:USERDOMAIN}\${env:USERNAME}"
+
+function Get-ForeignKeyReaders([string]$Path) {
+    # SIDs, not names: icacls prints localized principals (AUTORITE NT\Système...).
+    $allowed = @('S-1-5-18', 'S-1-5-32-544', [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+    $sids = @()
+    foreach ($ace in (Get-Acl -LiteralPath $Path).Access) {
+        if ($ace.AccessControlType -ne 'Allow') { continue }
+        try { $sid = $ace.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+        catch { $sid = "$($ace.IdentityReference)" }
+        if ($allowed -notcontains $sid) { $sids += $sid }
+    }
+    return @($sids | Select-Object -Unique)
+}
+
 if (($hasKey -or $hasCert) -and -not $Force) {
     if ($hasKey -and $hasCert) {
         Write-Host 'Existing TLS identity kept (-Force replaces it; every iPhone must then approve the new fingerprint).'
+        # A key copied in or edited by hand may be readable by another account, which
+        # could then impersonate the pinned host: tighten it before reusing it.
+        $foreign = @(Get-ForeignKeyReaders $keyPath)
+        if ($foreign.Count -gt 0) {
+            Invoke-Native $icacls @($keyPath, '/inheritance:r', '/grant:r', "${account}:(R)") 'icacls'
+            # /inheritance:r drops inherited ACEs only; explicit grants need /remove.
+            $explicit = @(Get-ForeignKeyReaders $keyPath)
+            if ($explicit.Count -gt 0) {
+                $removeArgs = @($keyPath, '/remove') + @($explicit | ForEach-Object { if ($_ -like 'S-1-*') { "*$_" } else { $_ } })
+                Invoke-Native $icacls $removeArgs 'icacls'
+            }
+            $left = @(Get-ForeignKeyReaders $keyPath)
+            if ($left.Count -gt 0) { throw "Private key $keyPath is still readable by $($left -join ', '); fix its ACL or rerun with -Force." }
+            Write-Warning "ACL de la clé privée resserrée : $keyPath (retiré : $($foreign -join ', '))."
+        }
         return (Write-Identity $certPath $keyPath)
     }
     throw "Incomplete TLS identity in $dir; rerun with -Force to regenerate it."
 }
 
 $openssl = Resolve-OpenSsl
-$icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
-$account = "${env:USERDOMAIN}\${env:USERNAME}"
 if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
 $work = Join-Path $dir ('.tls-identity.' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $work -Force | Out-Null

@@ -124,7 +124,7 @@ Base64.
 Contrat canonique (source de vérité : `RemoteScribe/Core/Sources`) :
 
 - `sequence` is meaningful only on AUDIO_CHUNK frames: per session, first chunk 0, strictly contiguous. On every other frame (PAIR, START_SESSION, STOP_SESSION, PING, SESSION_STATUS, ERROR) the sender writes 0 and the receiver ignores the field.
-- `StopSessionRequest.framesSent` = total PCM sample frames of the session = `bytesReceived / 2` (mono, 16-bit). Servers reject a STOP whose `framesSent` differs from `bytesReceived / 2` with `protocolViolation`.
+- `StopSessionRequest.framesSent` = total PCM sample frames of the session = `bytesReceived / 2` (mono, 16-bit). Servers reject a STOP whose `framesSent` differs from `bytesReceived / 2` with `protocolViolation`. The finalized WAV of a rejected session is kept on disk so the operator can retry the dictation from VoxLocal history.
 - PAIR must be the first frame of a connection, with session UUID `00000000-0000-0000-0000-000000000000`; a second PAIR is a protocol violation. START_SESSION before PAIR is `notPaired`.
 
 Correction du 2026-09-25 : la reconstruction initiale affirmait que le client
