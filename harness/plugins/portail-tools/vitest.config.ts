@@ -11,6 +11,8 @@ export default defineConfig({
     include: ['tests/test_portail_tools.spec.ts'],
     environment: 'node',
     testTimeout: 20_000,
+    // Spawning python3 for the real bridge can exceed the 10 s hook default on CI runners.
+    hookTimeout: 60_000,
   },
   server: { fs: { allow: [harness] } },
 })

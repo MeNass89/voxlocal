@@ -36,6 +36,7 @@ class BridgeProcess {
         ...process.env,
         PORTAIL_BRIDGE_TOKEN: TOOL_TOKEN,
         PORTAIL_BRIDGE_APPROVER_TOKEN: APPROVER_TOKEN,
+        PYTHONUNBUFFERED: '1',
         PORTAIL_BRIDGE_DRAFTS: join(this.dir, 'drafts.jsonl'),
         PORTAIL_BRIDGE_AUDIT: join(this.dir, 'portal-writes.jsonl'),
         PORTAIL_BRIDGE_STATE_DIR: join(this.dir, 'state'),

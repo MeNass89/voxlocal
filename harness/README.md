@@ -15,7 +15,7 @@ Plan de la vague 3 : [`docs/superpowers/plans/2026-09-25-voxlocal-wave3-harness.
 | Flux de dictée (`voxlocal-tools`, feeder) | [`plugins/voxlocal-tools/`](plugins/voxlocal-tools), [`ingest/`](ingest) | H2 fait |
 | Pont portail + mock enregistré (`portail-tools`) | [`bridge/`](bridge), [`plugins/portail-tools/`](plugins/portail-tools) | H3 fait |
 | Feu vert, audit, persona, boucle | [`plugins/scribe-approval/`](plugins/scribe-approval), [`plugins/scribe-persona/`](plugins/scribe-persona), [`tests/test_loop.py`](tests/test_loop.py) | H4 fait |
-| Démo de bout en bout | — | H5 |
+| Démo de bout en bout | [`demo/`](demo/README.md) | H5 fait |
 | Lanceurs Windows, CI | [`run-web.ps1`](run-web.ps1), [`ingest/run-feeder.ps1`](ingest/run-feeder.ps1), job `harness` de [`ci.yml`](../.github/workflows/ci.yml) | H6 fait |
 
 ## Architecture
@@ -81,6 +81,10 @@ $env:VOXLOCAL_API_TOKEN = '…'
 ```
 
 `run-web.ps1` refuse un `--host` hors boucle locale et tout `--trusted-host`, refuse une URL HTTP distante pour le modèle et un `PORTAIL_BRIDGE_URL` hors boucle locale, et relie le profil par une jonction (pas de droit administrateur). `run-feeder.ps1` refuse une API de dictées hors boucle locale. Les deux scripts sont exécutés sous `pwsh` 7.6 sur macOS (refus et lancement réel) ; la CI Windows les analyse avec PowerShell 7 et Windows PowerShell 5.1, et le job `harness` les lance sous `pwsh` sur ubuntu et macOS. Ils n’ont pas encore tourné sur un poste Windows.
+
+## Démo de bout en bout
+
+`bash harness/demo/run-demo.sh --check` puis `bash harness/demo/run-demo.sh` : API de dictées en mock, feeder, pont sur le portail enregistré, modèle scripté (ou `--provider local|pod`), chat `dsh`. Mode d’emploi : [`demo/README.md`](demo/README.md) ; script de 90 secondes : [`docs/demo-runbook.md`](../docs/demo-runbook.md#parcours-agent).
 
 ## Posture de sécurité
 
