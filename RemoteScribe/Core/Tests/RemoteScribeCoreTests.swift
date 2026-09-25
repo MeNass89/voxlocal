@@ -137,6 +137,27 @@ import Testing
     #expect(!gate.isLocked(peer: "d"))
 }
 
+@Test func pairingGateTableIsBounded() {
+    var clock = Date(timeIntervalSince1970: 1_000)
+    let gate = RemotePairingGate(maxFailures: 5, window: 600, lockout: 60, now: { clock })
+    for index in 0..<RemotePairingGate.maxPeers { gate.recordFailure(peer: "p\(index)") }
+    // Full: a new peer is refused, a tracked one is judged on its own record.
+    #expect(gate.isLocked(peer: "new"))
+    gate.recordFailure(peer: "new")
+    #expect(gate.isLocked(peer: "new"))
+    #expect(!gate.isLocked(peer: "p0"))
+
+    // A success frees a slot for a new peer.
+    gate.recordSuccess(peer: "p0")
+    #expect(!gate.isLocked(peer: "new"))
+    gate.recordFailure(peer: "new")
+    #expect(gate.isLocked(peer: "other"))
+
+    // Expired entries are evicted before a new peer is refused.
+    clock += 601
+    #expect(!gate.isLocked(peer: "other"))
+}
+
 @Test func pairLockedPeerIsRefused() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
