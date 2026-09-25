@@ -30,7 +30,8 @@ function Resolve-Python311 {
         $command = Get-Command $name -ErrorAction SilentlyContinue
         if ($command -and $command.Source) { $candidates += $command.Source }
     }
-    $probe = 'import sys; print("%d.%d" % sys.version_info[:2]); print(sys.executable)'
+    # No double quote inside: Windows PowerShell 5.1 strips them from native arguments.
+    $probe = 'import sys; print(''%d.%d'' % sys.version_info[:2]); print(sys.executable)'
     foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
         $prefix = @(); if ([IO.Path]::GetFileName($candidate) -ieq 'py.exe') { $prefix = @('-3') }
@@ -89,7 +90,7 @@ Write-Host 'Registering the local VoxLocal package in the venv (no pip, no index
 # A .pth file makes the copied src/ importable from site-packages without any
 # build step: it works on every CPython >= 3.11 regardless of the bundled
 # setuptools version, and leaves nothing to download.
-$sitePackages = (& $venvPython -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])' 2>$null | Select-Object -First 1)
+$sitePackages = (& $venvPython -c 'import sysconfig; print(sysconfig.get_paths()[''purelib''])' 2>$null | Select-Object -First 1)
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sitePackages) -or -not (Test-Path -LiteralPath $sitePackages -PathType Container)) {
     throw 'Could not locate the venv site-packages directory.'
 }
@@ -112,7 +113,7 @@ for ($i = 0; $i -lt $src.Length; $i++) {
 # Verify from outside the checkout so the import resolves through the .pth entry.
 Push-Location $env:TEMP
 try {
-    & $venvPython -c 'import agent.voxlocal_agent_api; print("agent import ok")'
+    & $venvPython -c 'import agent.voxlocal_agent_api; print(''agent import ok'')'
     if ($LASTEXITCODE -ne 0) { throw 'Installed agent package could not be imported from the new venv.' }
 } finally { Pop-Location }
 

@@ -176,6 +176,13 @@ final class LLMServerController {
             }
             try await Task.sleep(nanoseconds: Self.healthPollInterval)
         }
+        // Timed out, possibly after a newer launch took over during the last probe
+        // or sleep: end only this child, and leave the newer server and its state alone.
+        guard generation == current else {
+            if child.isRunning { child.terminate() }
+            if process === child { process = nil }
+            throw CancellationError()
+        }
         stop()
         throw VoxError.message("llama-server n’a pas répondu à /health en \(Int(Self.startupTimeout)) s")
     }

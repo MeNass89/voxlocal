@@ -112,7 +112,8 @@ git -C "$ROOT" archive --format=zip --prefix="VoxLocal-Source-$MAC_VERSION/" -o 
 for zip in "$DIST/$IOS_NAME" "$DIST/$WIN_NAME" "$DIST/$SRC_NAME"; do
   /usr/bin/unzip -tq "$zip" >/dev/null || { print -u2 "Archive corrompue : $zip"; exit 4; }
 done
-if /usr/bin/unzip -Z1 "$DIST/$WIN_NAME" "$DIST/$SRC_NAME" 2>/dev/null | grep -Eq '(^|/)(api-token|runtime\.env|\.env)$|\.(pem|key|p12)$'; then
+# `unzip -Z1 A B` would read B as a member pattern of A: list each archive alone.
+if for zip in "$DIST/$WIN_NAME" "$DIST/$SRC_NAME"; do /usr/bin/unzip -Z1 "$zip" 2>/dev/null; done | grep -Eq '(^|/)(api-token|runtime\.env|\.env)$|\.(pem|key|p12)$'; then
   print -u2 "Un secret potentiel est présent dans une archive."; exit 4
 fi
 print "unzip -t OK, aucun fichier secret"

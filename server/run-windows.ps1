@@ -29,7 +29,8 @@ function Resolve-Python311 {
         $command = Get-Command $name -ErrorAction SilentlyContinue
         if ($command -and $command.Source) { $candidates += $command.Source }
     }
-    $probe = 'import sys; print("%d.%d" % sys.version_info[:2]); print(sys.executable)'
+    # No double quote inside: Windows PowerShell 5.1 strips them from native arguments.
+    $probe = 'import sys; print(''%d.%d'' % sys.version_info[:2]); print(sys.executable)'
     foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
         $prefix = @(); if ([IO.Path]::GetFileName($candidate) -ieq 'py.exe') { $prefix = @('-3') }

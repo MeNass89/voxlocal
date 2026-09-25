@@ -286,9 +286,16 @@ final class PortableClientModel: ObservableObject {
             return "Terminez la dictée en cours avant d’appairer un poste."
         }
         let key = link.serverName
-        let previous = memoryPins[key] ?? (try? SecurePairingStore.loadData(account: Keys.pin(key)))
-        if Self.pinConflict(previous: previous, incoming: link.fingerprint) {
+        let previous: Result<Data?, Error> = memoryPins[key].map { .success($0) }
+            ?? Result { try SecurePairingStore.loadData(account: Keys.pin(key)) }
+        switch Self.linkPinDecision(previous: previous, incoming: link.fingerprint) {
+        case .apply:
+            break
+        case .conflict:
             return "Ce poste a déjà une empreinte différente. Oubliez d’abord « \(key) » dans les réglages de connexion, puis rescannez."
+        case .unreadable:
+            errorText = Self.unreadablePinMessage
+            return Self.unreadablePinMessage
         }
         if isPaired || isBusy { disconnect() }
         startDiscovery()
@@ -317,6 +324,17 @@ final class PortableClientModel: ObservableObject {
         return previous != incoming
     }
 
+    enum LinkPinDecision: Equatable { case apply, conflict, unreadable }
+
+    nonisolated static let unreadablePinMessage = "Impossible de lire l’empreinte enregistrée ; réessayez."
+
+    /// A Keychain read error is not "first use": the stored pin may exist, so the
+    /// link is neither pinned nor connected until the read succeeds.
+    nonisolated static func linkPinDecision(previous: Result<Data?, Error>, incoming: Data) -> LinkPinDecision {
+        guard case .success(let stored) = previous else { return .unreadable }
+        return pinConflict(previous: stored, incoming: incoming) ? .conflict : .apply
+    }
+
     private func connectPendingLinkServerIfFound() {
         guard let name = pendingLinkServerName, !isPaired, !isBusy, activeSessionID == nil,
               let server = servers.first(where: { $0.name == name })
@@ -328,7 +346,13 @@ final class PortableClientModel: ObservableObject {
         // name may already hold its own pin: never overwrite it with the link's.
         if server.name != name,
            let pin = memoryPins[name] ?? (try? SecurePairingStore.loadData(account: Keys.pin(name))) {
-            let existing = memoryPins[server.name] ?? (try? SecurePairingStore.loadData(account: Keys.pin(server.name)))
+            let existing: Data?
+            do {
+                existing = try memoryPins[server.name] ?? SecurePairingStore.loadData(account: Keys.pin(server.name))
+            } catch {
+                errorText = Self.unreadablePinMessage
+                return
+            }
             guard let resolved = Self.resolvePinForDiscoveredName(existing: existing, linked: pin) else {
                 errorText = "Ce poste a déjà une empreinte différente. Oubliez d’abord « \(server.name) » dans les réglages de connexion, puis rescannez."
                 return

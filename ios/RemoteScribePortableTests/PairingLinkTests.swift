@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import RemoteScribePortable
 
@@ -59,6 +60,16 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertFalse(PortableClientModel.pinConflict(previous: nil, incoming: fingerprint))
         XCTAssertFalse(PortableClientModel.pinConflict(previous: fingerprint, incoming: fingerprint))
         XCTAssertTrue(PortableClientModel.pinConflict(previous: other, incoming: fingerprint))
+    }
+
+    /// A Keychain read error must not look like first use: no pin, no connect.
+    func testUnreadableStoredPinFailsClosed() {
+        let other = Data(repeating: 0x11, count: 32)
+        let readError = SecurePairingStore.StoreError(status: errSecInteractionNotAllowed)
+        XCTAssertEqual(PortableClientModel.linkPinDecision(previous: .failure(readError), incoming: fingerprint), .unreadable)
+        XCTAssertEqual(PortableClientModel.linkPinDecision(previous: .success(nil), incoming: fingerprint), .apply)
+        XCTAssertEqual(PortableClientModel.linkPinDecision(previous: .success(fingerprint), incoming: fingerprint), .apply)
+        XCTAssertEqual(PortableClientModel.linkPinDecision(previous: .success(other), incoming: fingerprint), .conflict)
     }
 
     /// The case-insensitive Bonjour fallback copies the link's pin under the

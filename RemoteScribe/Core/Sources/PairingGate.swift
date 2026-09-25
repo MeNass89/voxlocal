@@ -5,11 +5,16 @@ import Foundation
 ///
 /// A peer is identified by its remote host (not host:port), so reconnecting from a new
 /// ephemeral port does not reset the counter.
+///
+/// The table holds at most `maxPeers` hosts, like the Python host: expired entries
+/// are evicted first, then a new peer is refused while the table is full.
 public final class RemotePairingGate {
     private struct Record {
         var failures: [Date] = []
         var lockedUntil: Date?
     }
+
+    public static let maxPeers = 1024
 
     private let maxFailures: Int
     private let window: TimeInterval
@@ -27,14 +32,18 @@ public final class RemotePairingGate {
 
     public func isLocked(peer: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard let until = records[peer]?.lockedUntil else { return false }
-        return until > now()
+        let current = now()
+        prune(at: current)
+        guard let record = records[peer] else { return records.count >= Self.maxPeers }
+        guard let until = record.lockedUntil else { return false }
+        return until > current
     }
 
     public func recordFailure(peer: String) {
         lock.lock(); defer { lock.unlock() }
         let current = now()
         prune(at: current)
+        guard records[peer] != nil || records.count < Self.maxPeers else { return }
         var record = records[peer] ?? Record()
         record.failures = record.failures.filter { current.timeIntervalSince($0) < window }
         record.failures.append(current)
