@@ -77,13 +77,21 @@ if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
     & $python -m venv $venv
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $venvPython -PathType Leaf)) { throw 'Python venv creation failed; check filesystem ACLs and the Python installation.' }
 }
-Write-Host 'Installing the local VoxLocal package without contacting an index.'
-& $venvPython -m pip install --no-index --no-deps --no-build-isolation $src
-if ($LASTEXITCODE -ne 0) {
-    throw 'Local package installation failed. The venv must contain setuptools (Python 3.11 usually does); no internet download was attempted.'
+Write-Host 'Registering the local VoxLocal package in the venv (no pip, no index, no build backend).'
+# A .pth file makes the copied src/ importable from site-packages without any
+# build step: it works on every CPython >= 3.11 regardless of the bundled
+# setuptools version, and leaves nothing to download.
+$sitePackages = (& $venvPython -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])' 2>$null | Select-Object -First 1)
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sitePackages) -or -not (Test-Path -LiteralPath $sitePackages -PathType Container)) {
+    throw 'Could not locate the venv site-packages directory.'
 }
-& $venvPython -c 'import agent.voxlocal_agent_api; print("agent import ok")'
-if ($LASTEXITCODE -ne 0) { throw 'Installed agent package could not be imported from the new venv.' }
+Set-Content -LiteralPath (Join-Path $sitePackages 'voxlocal.pth') -Value $src -Encoding ASCII -NoNewline
+# Verify from outside the checkout so the import resolves through the .pth entry.
+Push-Location $env:TEMP
+try {
+    & $venvPython -c 'import agent.voxlocal_agent_api; print("agent import ok")'
+    if ($LASTEXITCODE -ne 0) { throw 'Installed agent package could not be imported from the new venv.' }
+} finally { Pop-Location }
 
 $tlsFingerprint = $null
 if ($TlsDir) {

@@ -98,7 +98,7 @@ jobs:
           $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
           Get-Content -LiteralPath $manifestPath -Raw
           if (@($manifest.scheduledTasks).Count -ne 0) { throw 'no scheduled task was requested, but the manifest lists one' }
-          & "$root\.venv\Scripts\python.exe" -c 'import agent.voxlocal_agent_api as m, pathlib; p = pathlib.Path(m.__file__); print(p); assert "site-packages" in p.parts, p'
+          & "$root\.venv\Scripts\python.exe" -c 'import agent.voxlocal_agent_api as m, pathlib, sys; p = pathlib.Path(m.__file__).resolve(); print(p); assert str(p).lower().startswith(str(pathlib.Path(sys.argv[1]).resolve()).lower()), p' "$root\src"
           if ($LASTEXITCODE -ne 0) { throw 'agent package is not importable from the installed venv' }
       - name: Uninstall removes exactly the install root
         shell: pwsh

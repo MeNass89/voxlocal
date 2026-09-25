@@ -28,7 +28,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 ```
 
 Le script copie seulement `agent`, `server`, `windows` et `pyproject.toml`, crée
-`.venv`, installe le package avec `pip --no-index` et écrit un manifeste de
+`.venv`, rend le paquet importable par un fichier `voxlocal.pth` (aucun `pip`, aucun index, aucun backend de build) et écrit un manifeste de
 suppression. Il ne télécharge pas de modèle et n’écrit aucun token.
 
 Pour préparer une tâche d’agent de démonstration :

@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import stat
 import subprocess
 import threading
@@ -57,6 +58,7 @@ class RunpodRuntimeTests(unittest.TestCase):
     self.assertIn("30", detail)
 
 
+  @unittest.skipUnless(os.name == "posix" and shutil.which("bash"), "POSIX permissions and bash required")
   def test_start_all_rejects_permissive_token(self):
     import tempfile
     with tempfile.TemporaryDirectory() as directory:
