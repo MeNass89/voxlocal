@@ -1,0 +1,28 @@
+# VoxLocal "scribe" profile patch layer, applied after dsh-base and dsh-web-app.
+# Pinned to @deepseek-ai/dsh 0.1.7-rc.2: a user patch REPLACES the whole config
+# of the row it targets (no deep merge), so each override restates every field.
+#
+# Secrets never live here: the edge token is read from VOXLOCAL_LLM_TOKEN at
+# request time (apiKeyEnv), the endpoint from VOXLOCAL_LLM_URL at boot (!!js).
+
+- id: llm-pi-ai
+  config:
+    providers:
+      voxlocal-gpu:
+        name: VoxLocal GPU
+        apiKeyEnv: VOXLOCAL_LLM_TOKEN
+        api: openai-completions
+        baseURL: !!js process.env.VOXLOCAL_LLM_URL
+        # llama-server speaks max_tokens and rejects the developer role.
+        compat:
+          supportsDeveloperRole: false
+          maxTokensField: max_tokens
+        models:
+          - id: qwen3.8-27b
+            name: Qwen3.8 27B
+            input: [text, image]
+
+- id: agent-default-model
+  config:
+    provider: voxlocal-gpu
+    model: qwen3.8-27b
